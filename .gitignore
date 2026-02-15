@@ -64,6 +64,8 @@ logs/
 *.csv
 *.json
 data/
+!app/data/
+!app/data/*.py
 backtest_results/
 *.db
 *.sqlite

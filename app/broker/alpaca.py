@@ -36,12 +36,21 @@ class AlpacaClient:
     def get_account(self) -> AccountInfo:
         """Return current account info."""
         payload = self._request("GET", "/v2/account")
+        equity = float(payload.get("equity", payload.get("portfolio_value", payload["cash"])))
+        last_equity = float(
+            payload.get(
+                "last_equity",
+                payload.get("last_portfolio_value", payload["cash"]),
+            )
+        )
         return AccountInfo(
             id=str(payload["id"]),
             status=str(payload["status"]),
             cash=float(payload["cash"]),
             buying_power=float(payload["buying_power"]),
             trading_blocked=bool(payload["trading_blocked"]),
+            equity=equity,
+            last_equity=last_equity,
         )
 
     def get_positions(self) -> dict[str, Position]:
@@ -68,13 +77,47 @@ class AlpacaClient:
         }
         return self._request("POST", "/v2/orders", json=body)
 
-    def _request(self, method: str, path: str, json: dict | None = None) -> Any:
+    def get_open_orders(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        """Return currently open orders, optionally filtered by symbol."""
+        params: dict[str, str] = {"status": "open", "direction": "desc", "limit": "50"}
+        if symbol:
+            params["symbols"] = symbol.upper()
+        payload = self._request("GET", "/v2/orders", params=params)
+        return payload if isinstance(payload, list) else []
+
+    def cancel_order(self, order_id: str) -> None:
+        """Cancel one order by id."""
+        path = f"/v2/orders/{order_id}"
+        url = f"{self.base_url}{path}"
+        try:
+            response = self.session.request(
+                method="DELETE",
+                url=url,
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            raise BrokerError(f"Alpaca cancel request failed: {exc}") from exc
+
+        if response.status_code >= 400:
+            detail = response.text.strip() or "No response body."
+            raise BrokerError(
+                f"Alpaca API error {response.status_code} for {path}: {detail}"
+            )
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        json: dict | None = None,
+        params: dict[str, str] | None = None,
+    ) -> Any:
         url = f"{self.base_url}{path}"
         try:
             response = self.session.request(
                 method=method,
                 url=url,
                 json=json,
+                params=params,
                 timeout=self.timeout,
             )
         except requests.RequestException as exc:
@@ -90,4 +133,3 @@ class AlpacaClient:
             return response.json()
         except ValueError as exc:
             raise BrokerError(f"Invalid JSON response from Alpaca for {path}.") from exc
-

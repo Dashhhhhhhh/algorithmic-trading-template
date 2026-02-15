@@ -22,6 +22,8 @@ class AccountInfo:
     cash: float
     buying_power: float
     trading_blocked: bool
+    equity: float = 0.0
+    last_equity: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -42,4 +44,3 @@ class OrderRequest:
     side: OrderSide
     type: str = "market"
     time_in_force: str = "day"
-
