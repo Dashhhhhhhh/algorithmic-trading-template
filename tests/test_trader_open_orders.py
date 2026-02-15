@@ -40,7 +40,7 @@ def test_prepare_open_orders_cancels_conflict_and_allows_submit() -> None:
     assert broker.canceled == ["abc"]
 
 
-def test_prepare_open_orders_skips_duplicate_same_side() -> None:
+def test_prepare_open_orders_cancels_same_side_for_refresh() -> None:
     broker = _DummyBroker(
         orders=[
             {"id": "abc", "symbol": "SPY", "side": "sell"},
@@ -48,6 +48,5 @@ def test_prepare_open_orders_skips_duplicate_same_side() -> None:
     )
     trader = _dummy_trader(broker)
     should_submit = trader._prepare_open_orders_for_symbol("SPY", OrderSide.SELL)
-    assert should_submit is False
-    assert broker.canceled == []
-
+    assert should_submit is True
+    assert broker.canceled == ["abc"]

@@ -4,11 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
 from app.strategy.base import Signal, Strategy
 from app.utils.errors import StrategyError
+
+if TYPE_CHECKING:
+    from app.config import Settings
+
+STRATEGY_NAME = "sma_crossover"
 
 
 @dataclass(frozen=True)
@@ -60,3 +66,11 @@ class SmaCrossoverStrategy(Strategy):
             return Signal.SELL
         return Signal.HOLD
 
+
+def build_strategy(settings: Settings) -> Strategy:
+    """Build strategy instance from app settings."""
+    params = SmaCrossoverParams(
+        short_window=settings.sma_short_window,
+        long_window=settings.sma_long_window,
+    )
+    return SmaCrossoverStrategy(params=params)

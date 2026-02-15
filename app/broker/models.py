@@ -44,3 +44,13 @@ class OrderRequest:
     side: OrderSide
     type: str = "market"
     time_in_force: str = "day"
+
+
+@dataclass(frozen=True)
+class MarketClock:
+    """Minimal market clock fields."""
+
+    is_open: bool
+    timestamp: str
+    next_open: str
+    next_close: str

@@ -27,6 +27,11 @@ def _parse_symbols(value: str | None) -> list[str]:
     return symbols or ["SPY"]
 
 
+def _strategy_symbols_env_var(strategy_name: str) -> str:
+    normalized = strategy_name.strip().upper().replace("-", "_")
+    return f"{normalized}_SYMBOLS"
+
+
 @dataclass(frozen=True)
 class Settings:
     """Runtime settings loaded from environment variables."""
@@ -45,7 +50,7 @@ class Settings:
     log_level: str = "INFO"
     log_file: str | None = None
     order_qty: int = 1
-    loop_interval_seconds: int = 30
+    loop_interval_seconds: int = 5
     backtest_starting_cash: float = 100000.0
     sma_short_window: int = 20
     sma_long_window: int = 50
@@ -53,6 +58,13 @@ class Settings:
     hft_volatility_window: int = 12
     hft_min_volatility: float = 0.0005
     hft_flip_seconds: int = 3
+
+    def symbols_for_strategy(self, strategy_name: str) -> list[str]:
+        """Resolve symbols for a strategy from <STRATEGY_NAME>_SYMBOLS, with SYMBOLS fallback."""
+        strategy_symbols = os.getenv(_strategy_symbols_env_var(strategy_name))
+        if strategy_symbols is None or not strategy_symbols.strip():
+            return list(self.symbols)
+        return _parse_symbols(strategy_symbols)
 
     @classmethod
     def from_env(cls) -> Self:
@@ -78,7 +90,7 @@ class Settings:
                 log_level=os.getenv("LOG_LEVEL", "INFO").strip().upper(),
                 log_file=os.getenv("LOG_FILE", "").strip() or None,
                 order_qty=int(os.getenv("ORDER_QTY", "1")),
-                loop_interval_seconds=int(os.getenv("LOOP_INTERVAL_SECONDS", "30")),
+                loop_interval_seconds=int(os.getenv("LOOP_INTERVAL_SECONDS", "5")),
                 backtest_starting_cash=float(os.getenv("BACKTEST_STARTING_CASH", "100000")),
                 sma_short_window=int(os.getenv("SMA_SHORT_WINDOW", "20")),
                 sma_long_window=int(os.getenv("SMA_LONG_WINDOW", "50")),

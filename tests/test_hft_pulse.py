@@ -12,7 +12,7 @@ def _bars_from_prices(prices: list[float]) -> pd.DataFrame:
     return pd.DataFrame({"close": prices})
 
 
-def test_hft_pulse_uses_clock_bias_when_market_is_flat(monkeypatch) -> None:
+def test_hft_pulse_alternates_when_market_is_flat() -> None:
     strategy = HftPulseStrategy(
         HftPulseParams(
             momentum_window=3,
@@ -23,13 +23,12 @@ def test_hft_pulse_uses_clock_bias_when_market_is_flat(monkeypatch) -> None:
     )
     bars = _bars_from_prices([100.0] * 30)
 
-    monkeypatch.setattr("app.strategy.hft_pulse.time.time", lambda: 8.0)  # even bucket
-    signal_even = strategy.generate_signal("SPY", bars)
-    assert signal_even == Signal.BUY
-
-    monkeypatch.setattr("app.strategy.hft_pulse.time.time", lambda: 11.0)  # odd bucket
-    signal_odd = strategy.generate_signal("SPY", bars)
-    assert signal_odd == Signal.SELL
+    signal_1 = strategy.generate_signal("SPY", bars)
+    signal_2 = strategy.generate_signal("SPY", bars)
+    signal_3 = strategy.generate_signal("SPY", bars)
+    assert signal_1 == Signal.BUY
+    assert signal_2 == Signal.SELL
+    assert signal_3 == Signal.BUY
 
 
 def test_hft_pulse_follows_positive_momentum() -> None:

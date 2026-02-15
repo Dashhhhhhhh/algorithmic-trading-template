@@ -4,12 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-import time
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
 from app.strategy.base import Signal, Strategy
 from app.utils.errors import StrategyError
+
+if TYPE_CHECKING:
+    from app.config import Settings
+
+STRATEGY_NAME = "hft_pulse"
 
 
 @dataclass(frozen=True)
@@ -41,6 +46,7 @@ class HftPulseStrategy(Strategy):
             raise StrategyError("min_volatility cannot be negative.")
         self.params = params
         self.logger = logging.getLogger("algotrade.strategy.hft_pulse")
+        self._last_signal_by_symbol: dict[str, Signal] = {}
 
     def generate_signal(self, symbol: str, bars: pd.DataFrame) -> Signal:
         if "close" not in bars.columns:
@@ -63,25 +69,37 @@ class HftPulseStrategy(Strategy):
         if pd.isna(momentum) or pd.isna(volatility):
             return Signal.HOLD
 
-        clock_bucket = int(time.time() // self.params.flip_seconds)
-        clock_bias = Signal.BUY if (clock_bucket % 2 == 0) else Signal.SELL
         weak_momentum = abs(momentum) <= (volatility * 0.15)
+        symbol_key = symbol.upper()
 
         if volatility < self.params.min_volatility or weak_momentum:
-            signal = clock_bias
-            reason = "clock_bias"
+            # For "entertaining" demo behavior, alternate direction each pass
+            # when the market regime is weak/flat.
+            previous = self._last_signal_by_symbol.get(symbol_key, Signal.SELL)
+            signal = Signal.BUY if previous == Signal.SELL else Signal.SELL
+            reason = "alternating_bias"
         else:
             signal = Signal.BUY if momentum > 0 else Signal.SELL
             reason = "momentum"
 
+        self._last_signal_by_symbol[symbol_key] = signal
         self.logger.info(
-            "%s: hft_pulse signal=%s reason=%s momentum=%.6f vol=%.6f bucket=%s",
+            "%s: hft_pulse signal=%s reason=%s momentum=%.6f vol=%.6f",
             symbol,
             signal.value,
             reason,
             momentum,
             volatility,
-            clock_bucket,
         )
         return signal
 
+
+def build_strategy(settings: Settings) -> Strategy:
+    """Build strategy instance from app settings."""
+    params = HftPulseParams(
+        momentum_window=settings.hft_momentum_window,
+        volatility_window=settings.hft_volatility_window,
+        min_volatility=settings.hft_min_volatility,
+        flip_seconds=settings.hft_flip_seconds,
+    )
+    return HftPulseStrategy(params=params)

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 
 from app.broker.alpaca import AlpacaClient
-from app.broker.models import AccountInfo, OrderRequest, OrderSide, Position
+from app.broker.models import AccountInfo, MarketClock, OrderRequest, OrderSide, Position
 from app.data.base import MarketDataClient
 from app.strategy.base import Signal, Strategy
 from app.utils.errors import BrokerError, DataProviderError, StrategyError
@@ -37,6 +38,7 @@ class Trader:
         order_qty = qty or self.default_qty
 
         account = self.broker_client.get_account()
+        clock = self.broker_client.get_clock()
         positions = self.broker_client.get_positions()
         day_pnl_text = self._format_day_pnl(account)
         self.logger.info(
@@ -47,6 +49,7 @@ class Trader:
             day_pnl_text,
             account.trading_blocked,
         )
+        self._log_market_clock(clock)
 
         if account.trading_blocked:
             self.logger.warning("Trading is blocked on this account. Exiting cycle.")
@@ -72,12 +75,19 @@ class Trader:
         qty: int,
     ) -> None:
         bars = self.data_client.fetch_daily(symbol=symbol)
+        reference_price = float(bars["close"].iloc[-1])
         signal = self.strategy.generate_signal(symbol=symbol, bars=bars)
 
         position = positions.get(symbol)
         current_qty = self._signed_position_qty(position)
 
-        self.logger.info("%s: signal=%s current_position=%s", symbol, signal.value, current_qty)
+        self.logger.info(
+            "%s: signal=%s current_position=%s ref_price=%.2f",
+            symbol,
+            signal.value,
+            current_qty,
+            reference_price,
+        )
 
         order = self._build_order(
             symbol=symbol,
@@ -91,11 +101,13 @@ class Trader:
             return
 
         if self.dry_run:
+            est_notional = reference_price * float(order.qty)
             self.logger.info(
-                "DRY RUN | %s %s x%s (order not sent)",
+                "DRY RUN | %s %s x%s est_notional=$%.2f (order not sent)",
                 order.side.value.upper(),
                 order.symbol,
                 order.qty,
+                est_notional,
             )
             return
 
@@ -103,14 +115,15 @@ class Trader:
             return
 
         response = self.broker_client.submit_market_order(order)
-        self.logger.info(
-            "Order submitted | id=%s symbol=%s side=%s qty=%s status=%s",
-            response.get("id"),
-            response.get("symbol"),
-            response.get("side"),
-            response.get("qty"),
-            response.get("status"),
-        )
+        self._log_order_response(response=response, fallback_ref_price=reference_price)
+
+        # Quick follow-up for market-open sessions to capture fill amount fast.
+        order_id = str(response.get("id", ""))
+        order_status = str(response.get("status", ""))
+        if order_id and order_status in {"accepted", "new", "pending_new"}:
+            time.sleep(0.8)
+            refreshed = self.broker_client.get_order(order_id=order_id)
+            self._log_order_response(response=refreshed, fallback_ref_price=reference_price, prefix="Order update")
 
     @staticmethod
     def _signed_position_qty(position: Position | None) -> int:
@@ -160,7 +173,10 @@ class Trader:
         return OrderRequest(symbol=symbol, qty=abs(delta), side=OrderSide.SELL)
 
     def _prepare_open_orders_for_symbol(self, symbol: str, desired_side: OrderSide) -> bool:
-        """Cancel conflicting open orders and avoid duplicate same-side submits."""
+        """Refresh any open order for the symbol before submitting a new one.
+
+        This keeps order flow active instead of idling behind a pending order.
+        """
         open_orders = self.broker_client.get_open_orders(symbol=symbol)
         symbol_orders = [
             order
@@ -170,28 +186,64 @@ class Trader:
         if not symbol_orders:
             return True
 
-        same_side_order_exists = False
         for order in symbol_orders:
             order_id = str(order.get("id", ""))
             side = str(order.get("side", "")).lower()
             if not order_id:
                 continue
 
-            if side == desired_side.value:
-                same_side_order_exists = True
-                continue
-
             self.broker_client.cancel_order(order_id=order_id)
-            self.logger.info("%s: canceled conflicting open order id=%s side=%s", symbol, order_id, side)
+            self.logger.info("%s: canceled open order id=%s side=%s", symbol, order_id, side)
 
-        if same_side_order_exists:
-            self.logger.info(
-                "%s: existing open %s order already present; skipping duplicate submit.",
-                symbol,
-                desired_side.value.upper(),
-            )
-            return False
         return True
+
+    @staticmethod
+    def _to_float(value: object, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _log_order_response(
+        self,
+        response: dict,
+        fallback_ref_price: float,
+        prefix: str = "Order submitted",
+    ) -> None:
+        symbol = str(response.get("symbol", ""))
+        side = str(response.get("side", ""))
+        qty = self._to_float(response.get("qty"), default=0.0)
+        status = str(response.get("status", ""))
+        order_id = str(response.get("id", ""))
+
+        filled_qty = self._to_float(response.get("filled_qty"), default=0.0)
+        filled_avg_price = self._to_float(response.get("filled_avg_price"), default=0.0)
+        est_notional = qty * fallback_ref_price
+        filled_notional = filled_qty * filled_avg_price if filled_avg_price > 0 else 0.0
+
+        self.logger.info(
+            "%s | id=%s symbol=%s side=%s qty=%.4f status=%s est_notional=$%.2f filled_qty=%.4f filled_avg=$%.2f filled_notional=$%.2f",
+            prefix,
+            order_id,
+            symbol,
+            side,
+            qty,
+            status,
+            est_notional,
+            filled_qty,
+            filled_avg_price,
+            filled_notional,
+        )
+
+    def _log_market_clock(self, clock: MarketClock) -> None:
+        state = "OPEN" if clock.is_open else "CLOSED"
+        self.logger.info(
+            "Market=%s timestamp=%s next_open=%s next_close=%s",
+            state,
+            clock.timestamp,
+            clock.next_open,
+            clock.next_close,
+        )
 
     @staticmethod
     def _format_day_pnl(account: AccountInfo) -> str:

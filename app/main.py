@@ -16,8 +16,7 @@ from app.data.csv_data import CsvDataClient
 from app.execution.trader import Trader
 from app.logging_utils import setup_logger
 from app.strategy.base import Strategy
-from app.strategy.hft_pulse import HftPulseParams, HftPulseStrategy
-from app.strategy.sma_crossover import SmaCrossoverParams, SmaCrossoverStrategy
+from app.strategy.loader import create_strategy
 from app.utils.errors import ConfigError, TradingAppError
 
 
@@ -25,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     """Parse CLI arguments that can override environment configuration."""
     parser = argparse.ArgumentParser(description="Bare-bones algorithmic trading runner")
     parser.add_argument("--symbols", type=str, help="Comma-separated symbols (e.g. SPY,AAPL)")
-    parser.add_argument("--strategy", type=str, help="Strategy name (default: sma_crossover)")
+    parser.add_argument("--strategy", type=str, help="Strategy module name from app/strategy/")
     parser.add_argument(
         "--data-source",
         type=str,
@@ -61,29 +60,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         help="Stop after N passes (for testing); default runs indefinitely",
     )
-    parser.add_argument("--short-window", type=int, help="SMA short window override")
-    parser.add_argument("--long-window", type=int, help="SMA long window override")
-    parser.add_argument(
-        "--hft-momentum-window",
-        type=int,
-        help="HFT pulse momentum window override",
-    )
-    parser.add_argument(
-        "--hft-volatility-window",
-        type=int,
-        help="HFT pulse volatility window override",
-    )
-    parser.add_argument(
-        "--hft-min-volatility",
-        type=float,
-        help="HFT pulse minimum volatility override",
-    )
-    parser.add_argument(
-        "--hft-flip-seconds",
-        type=int,
-        help="HFT pulse clock flip interval (seconds)",
-    )
-
     dry_group = parser.add_mutually_exclusive_group()
     dry_group.add_argument("--dry-run", action="store_true", help="Do not place real orders")
     dry_group.add_argument(
@@ -96,33 +72,17 @@ def parse_args() -> argparse.Namespace:
 
 def build_strategy(name: str, settings: Settings) -> Strategy:
     """Factory for available strategies."""
-    normalized = name.strip().lower()
-    if normalized == "sma_crossover":
-        params = SmaCrossoverParams(
-            short_window=settings.sma_short_window,
-            long_window=settings.sma_long_window,
-        )
-        return SmaCrossoverStrategy(params=params)
-    if normalized == "hft_pulse":
-        params = HftPulseParams(
-            momentum_window=settings.hft_momentum_window,
-            volatility_window=settings.hft_volatility_window,
-            min_volatility=settings.hft_min_volatility,
-            flip_seconds=settings.hft_flip_seconds,
-        )
-        return HftPulseStrategy(params=params)
-    raise ConfigError(
-        f"Unknown strategy '{name}'. Supported strategies: sma_crossover, hft_pulse"
-    )
+    return create_strategy(name=name, settings=settings)
 
 
 def apply_cli_overrides(settings: Settings, args: argparse.Namespace) -> Settings:
     """Merge CLI flags into environment-derived settings."""
-    symbols = settings.symbols
-    if args.symbols:
-        symbols = [item.strip().upper() for item in args.symbols.split(",") if item.strip()]
-
     strategy = args.strategy or settings.strategy
+    symbols = (
+        [item.strip().upper() for item in args.symbols.split(",") if item.strip()]
+        if args.symbols
+        else settings.symbols_for_strategy(strategy)
+    )
     data_source = (args.data_source or settings.data_source).strip().lower()
     historical_data_dir = args.historical_dir or settings.historical_data_dir
     timeframe = args.timeframe or settings.timeframe
@@ -132,17 +92,6 @@ def apply_cli_overrides(settings: Settings, args: argparse.Namespace) -> Setting
         if args.interval_seconds is not None
         else settings.loop_interval_seconds
     )
-    short_window = args.short_window or settings.sma_short_window
-    long_window = args.long_window or settings.sma_long_window
-    hft_momentum_window = args.hft_momentum_window or settings.hft_momentum_window
-    hft_volatility_window = args.hft_volatility_window or settings.hft_volatility_window
-    hft_min_volatility = (
-        args.hft_min_volatility
-        if args.hft_min_volatility is not None
-        else settings.hft_min_volatility
-    )
-    hft_flip_seconds = args.hft_flip_seconds or settings.hft_flip_seconds
-
     dry_run = settings.dry_run
     if args.dry_run:
         dry_run = True
@@ -159,12 +108,6 @@ def apply_cli_overrides(settings: Settings, args: argparse.Namespace) -> Setting
         dry_run=dry_run,
         order_qty=order_qty,
         loop_interval_seconds=loop_interval_seconds,
-        sma_short_window=short_window,
-        sma_long_window=long_window,
-        hft_momentum_window=hft_momentum_window,
-        hft_volatility_window=hft_volatility_window,
-        hft_min_volatility=hft_min_volatility,
-        hft_flip_seconds=hft_flip_seconds,
     )
     return overridden.validate()
 

@@ -7,7 +7,7 @@ from typing import Any
 
 import requests
 
-from app.broker.models import AccountInfo, OrderRequest, Position
+from app.broker.models import AccountInfo, MarketClock, OrderRequest, Position
 from app.utils.errors import BrokerError
 
 
@@ -77,6 +77,10 @@ class AlpacaClient:
         }
         return self._request("POST", "/v2/orders", json=body)
 
+    def get_order(self, order_id: str) -> dict[str, Any]:
+        """Get one order by id."""
+        return self._request("GET", f"/v2/orders/{order_id}")
+
     def get_open_orders(self, symbol: str | None = None) -> list[dict[str, Any]]:
         """Return currently open orders, optionally filtered by symbol."""
         params: dict[str, str] = {"status": "open", "direction": "desc", "limit": "50"}
@@ -84,6 +88,16 @@ class AlpacaClient:
             params["symbols"] = symbol.upper()
         payload = self._request("GET", "/v2/orders", params=params)
         return payload if isinstance(payload, list) else []
+
+    def get_clock(self) -> MarketClock:
+        """Return market open/close state."""
+        payload = self._request("GET", "/v2/clock")
+        return MarketClock(
+            is_open=bool(payload.get("is_open", False)),
+            timestamp=str(payload.get("timestamp", "")),
+            next_open=str(payload.get("next_open", "")),
+            next_close=str(payload.get("next_close", "")),
+        )
 
     def cancel_order(self, order_id: str) -> None:
         """Cancel one order by id."""

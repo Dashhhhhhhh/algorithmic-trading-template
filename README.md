@@ -83,13 +83,14 @@ Key defaults:
 - `ALPACA_BASE_URL=https://paper-api.alpaca.markets`
 - `ALPACA_DATA_URL=https://data.alpaca.markets`
 - `SYMBOLS=SPY`
+- `<STRATEGY_NAME>_SYMBOLS` (optional per-strategy universe override, e.g. `HFT_PULSE_SYMBOLS=SPY,QQQ`)
 - `DATA_SOURCE=alpaca`
 - `HISTORICAL_DATA_DIR=historical_data`
 - `STRATEGY=sma_crossover`
 - `DRY_RUN=true`
 - `ALLOW_SHORT=true`
 - `ORDER_QTY=1`
-- `LOOP_INTERVAL_SECONDS=30`
+- `LOOP_INTERVAL_SECONDS=5`
 - `BACKTEST_STARTING_CASH=100000`
 
 ## Run
@@ -110,9 +111,8 @@ CLI overrides (examples):
 
 ```bash
 python -m app.main --once --symbols SPY,AAPL --dry-run
-python -m app.main --once --symbols SPY --qty 2 --short-window 10 --long-window 30
+python -m app.main --once --symbols SPY --qty 2
 python -m app.main --once --live
-python -m app.main --once --strategy hft_pulse --hft-flip-seconds 1 --live
 python -m app.main --strategy hft_pulse --interval-seconds 15 --live
 python -m app.main --strategy hft_pulse --interval-seconds 5 --max-passes 20 --dry-run
 python -m app.main --data-source alpaca --timeframe 1Min --live
@@ -129,6 +129,7 @@ Notes:
 - `--max-passes` is useful for short demos/tests of loop mode.
 - With `ALLOW_SHORT=true`, SELL signals can open short positions when flat.
 - Account day P/L is shown each pass in green/red in a real terminal.
+- Order logs include `est_notional` and fill amounts (`filled_qty`, `filled_avg`, `filled_notional`).
 - Keep `ALPACA_BASE_URL` on paper endpoint for safe practice.
 
 CSV format for backtesting:
@@ -136,6 +137,16 @@ CSV format for backtesting:
 - Required columns: `date,open,high,low,close,volume`
 
 ## Strategy
+
+Strategies are loaded dynamically from files in `app/strategy/`.
+To make a strategy discoverable, add a module with:
+- `STRATEGY_NAME = "your_name"` (optional; filename is used if omitted)
+- `build_strategy(settings) -> Strategy`
+
+Universe selection:
+- Global fallback: `SYMBOLS=SPY,AAPL`
+- Strategy-specific override: `<STRATEGY_NAME>_SYMBOLS=...`
+- Example: `HFT_PULSE_SYMBOLS=SPY,QQQ`
 
 Included strategies:
 - **SMA crossover**
@@ -159,7 +170,7 @@ Entertaining demo loop (intentional frequent trades):
 
 ```bash
 for i in {1..6}; do
-  python -m app.main --once --strategy hft_pulse --symbols SPY --qty 1 --hft-flip-seconds 1 --live
+  python -m app.main --once --strategy hft_pulse --symbols SPY --qty 1 --live
   sleep 1
 done
 ```
