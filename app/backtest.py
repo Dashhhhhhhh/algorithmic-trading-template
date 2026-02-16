@@ -62,14 +62,19 @@ def run_backtest_for_symbol(
             cash -= delta * close
             position = target
             trades += 1
-            logger.debug(
-                "%s backtest trade | signal=%s delta=%s price=%.2f position=%s cash=%.2f",
+            timestamp = view.index[-1]
+            equity = cash + (position * close)
+            logger.info(
+                "%s backtest trade #%s | time=%s signal=%s delta=%s price=%.2f position=%s cash=%.2f equity=%.2f",
                 symbol,
+                trades,
+                timestamp,
                 signal.value,
                 delta,
                 close,
                 position,
                 cash,
+                equity,
             )
 
     last_close = float(bars["close"].iloc[-1])
@@ -85,4 +90,3 @@ def run_backtest_for_symbol(
         pnl_pct=pnl_pct,
         trades=trades,
     )
-

@@ -29,9 +29,10 @@ class CsvDataClient:
         _ = adjusted  # CSV loader currently does not differentiate adjusted bars.
         path = self._resolve_path(symbol)
         if path is None:
+            expected_paths = ", ".join(self._expected_csv_hints(symbol))
             raise DataProviderError(
                 f"No CSV found for {symbol} in {self.data_dir}. "
-                f"Expected {symbol.upper()}.csv"
+                f"Expected one of: {expected_paths}"
             )
 
         try:
@@ -43,14 +44,59 @@ class CsvDataClient:
         return frame
 
     def _resolve_path(self, symbol: str) -> Path | None:
-        candidates = [
-            self.data_dir / f"{symbol.upper()}.csv",
-            self.data_dir / f"{symbol.lower()}.csv",
-        ]
+        market, raw_symbol = self._split_market_symbol(symbol)
+        symbol_upper = raw_symbol.upper()
+        symbol_lower = raw_symbol.lower()
+
+        candidates: list[Path] = []
+        if market is not None:
+            market_upper = market.upper()
+            market_lower = market.lower()
+            candidates.extend(
+                [
+                    self.data_dir / market_upper / f"{symbol_upper}.csv",
+                    self.data_dir / market_upper / f"{symbol_lower}.csv",
+                    self.data_dir / market_lower / f"{symbol_upper}.csv",
+                    self.data_dir / market_lower / f"{symbol_lower}.csv",
+                ]
+            )
+
+        candidates.extend(
+            [
+                self.data_dir / f"{symbol_upper}.csv",
+                self.data_dir / f"{symbol_lower}.csv",
+            ]
+        )
+
+        seen: set[Path] = set()
         for path in candidates:
+            if path in seen:
+                continue
+            seen.add(path)
             if path.exists():
                 return path
         return None
+
+    @staticmethod
+    def _split_market_symbol(symbol: str) -> tuple[str | None, str]:
+        normalized = symbol.strip()
+        if ":" not in normalized:
+            return None, normalized
+
+        market, bare_symbol = normalized.split(":", 1)
+        market = market.strip()
+        bare_symbol = bare_symbol.strip()
+        if not market or not bare_symbol:
+            return None, normalized
+        return market, bare_symbol
+
+    def _expected_csv_hints(self, symbol: str) -> list[str]:
+        market, raw_symbol = self._split_market_symbol(symbol)
+        symbol_upper = raw_symbol.upper()
+        hints = [f"{symbol_upper}.csv"]
+        if market is not None:
+            hints.insert(0, f"{market.upper()}/{symbol_upper}.csv")
+        return hints
 
     def _normalize_columns(self, frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
         cols = {col.strip().lower(): col for col in frame.columns}
@@ -86,4 +132,3 @@ class CsvDataClient:
         if frame.empty:
             raise DataProviderError(f"{symbol}: CSV has no valid OHLCV rows after parsing.")
         return frame
-

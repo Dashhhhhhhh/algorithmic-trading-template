@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import sys
 import time
 
@@ -35,7 +36,7 @@ class Trader:
 
     def run_once(self, symbols: list[str], qty: int | None = None) -> None:
         """Execute one full trading cycle for provided symbols."""
-        order_qty = qty or self.default_qty
+        order_qty = float(qty or self.default_qty)
 
         account = self.broker_client.get_account()
         clock = self.broker_client.get_clock()
@@ -74,30 +75,31 @@ class Trader:
         positions: dict[str, Position],
         qty: int,
     ) -> None:
+        broker_symbol = self.broker_client.normalize_symbol(symbol)
         bars = self.data_client.fetch_daily(symbol=symbol)
         reference_price = float(bars["close"].iloc[-1])
         signal = self.strategy.generate_signal(symbol=symbol, bars=bars)
 
-        position = positions.get(symbol)
+        position = positions.get(broker_symbol)
         current_qty = self._signed_position_qty(position)
 
         self.logger.info(
             "%s: signal=%s current_position=%s ref_price=%.2f",
-            symbol,
+            broker_symbol,
             signal.value,
             current_qty,
             reference_price,
         )
 
         order = self._build_order(
-            symbol=symbol,
+            symbol=broker_symbol,
             signal=signal,
             current_qty=current_qty,
             qty=qty,
             allow_short=self.allow_short,
         )
         if order is None:
-            self.logger.info("%s: no order needed.", symbol)
+            self.logger.info("%s: no order needed.", broker_symbol)
             return
 
         if self.dry_run:
@@ -111,7 +113,7 @@ class Trader:
             )
             return
 
-        if not self._prepare_open_orders_for_symbol(symbol=symbol, desired_side=order.side):
+        if not self._prepare_open_orders_for_symbol(symbol=broker_symbol, desired_side=order.side):
             return
 
         response = self.broker_client.submit_market_order(order)
@@ -126,15 +128,17 @@ class Trader:
             self._log_order_response(response=refreshed, fallback_ref_price=reference_price, prefix="Order update")
 
     @staticmethod
-    def _signed_position_qty(position: Position | None) -> int:
-        """Convert Alpaca position into signed whole-share quantity.
+    def _signed_position_qty(position: Position | None) -> float:
+        """Convert Alpaca position into signed quantity.
 
         Positive = long, negative = short, zero = flat.
         """
         if position is None:
-            return 0
+            return 0.0
 
-        qty_abs = int(round(abs(position.qty)))
+        qty_abs = abs(float(position.qty))
+        if qty_abs <= 0:
+            return 0.0
         side = position.side.strip().lower()
         if side == "short":
             return -qty_abs
@@ -144,8 +148,8 @@ class Trader:
     def _build_order(
         symbol: str,
         signal: Signal,
-        current_qty: int,
-        qty: int,
+        current_qty: float,
+        qty: float,
         allow_short: bool,
     ) -> OrderRequest | None:
         """Translate signal into a target position and submit delta order.
@@ -165,12 +169,24 @@ class Trader:
             return None
 
         delta = target_qty - current_qty
-        if delta == 0:
+        if abs(delta) < 1e-9:
+            return None
+
+        order_qty = Trader._truncate_order_qty(abs(delta))
+        if order_qty <= 0:
             return None
 
         if delta > 0:
-            return OrderRequest(symbol=symbol, qty=delta, side=OrderSide.BUY)
-        return OrderRequest(symbol=symbol, qty=abs(delta), side=OrderSide.SELL)
+            return OrderRequest(symbol=symbol, qty=order_qty, side=OrderSide.BUY)
+        return OrderRequest(symbol=symbol, qty=order_qty, side=OrderSide.SELL)
+
+    @staticmethod
+    def _truncate_order_qty(value: float, decimals: int = 8) -> float:
+        """Truncate quantity down to avoid precision over-requests at the broker."""
+        if value <= 0:
+            return 0.0
+        scale = 10 ** decimals
+        return math.floor(value * scale) / scale
 
     def _prepare_open_orders_for_symbol(self, symbol: str, desired_side: OrderSide) -> bool:
         """Refresh any open order for the symbol before submitting a new one.

@@ -68,12 +68,17 @@ class AlpacaClient:
 
     def submit_market_order(self, request: OrderRequest) -> dict[str, Any]:
         """Submit a market order and return raw JSON response."""
+        normalized_symbol = self.normalize_symbol(request.symbol)
+        time_in_force = request.time_in_force
+        if self._is_crypto_symbol(normalized_symbol) and time_in_force == "day":
+            # Alpaca crypto market orders reject DAY; use GTC by default.
+            time_in_force = "gtc"
         body = {
-            "symbol": request.symbol.upper(),
+            "symbol": normalized_symbol,
             "qty": request.qty,
             "side": request.side.value,
             "type": request.type,
-            "time_in_force": request.time_in_force,
+            "time_in_force": time_in_force,
         }
         return self._request("POST", "/v2/orders", json=body)
 
@@ -85,7 +90,7 @@ class AlpacaClient:
         """Return currently open orders, optionally filtered by symbol."""
         params: dict[str, str] = {"status": "open", "direction": "desc", "limit": "50"}
         if symbol:
-            params["symbols"] = symbol.upper()
+            params["symbols"] = self.normalize_symbol(symbol)
         payload = self._request("GET", "/v2/orders", params=params)
         return payload if isinstance(payload, list) else []
 
@@ -147,3 +152,22 @@ class AlpacaClient:
             return response.json()
         except ValueError as exc:
             raise BrokerError(f"Invalid JSON response from Alpaca for {path}.") from exc
+
+    @staticmethod
+    def normalize_symbol(symbol: str) -> str:
+        """Normalize user symbols to Alpaca trading symbol format.
+
+        Examples:
+        - BTCUSDT -> BTCUSD
+        - BTC/USDT -> BTCUSD
+        - BTC/USD -> BTCUSD
+        """
+        normalized = symbol.strip().upper().replace("/", "").replace("-", "")
+        if normalized.endswith("USDT") and len(normalized) >= 7:
+            return f"{normalized[:-4]}USD"
+        return normalized
+
+    @staticmethod
+    def _is_crypto_symbol(symbol: str) -> bool:
+        normalized = AlpacaClient.normalize_symbol(symbol)
+        return normalized.endswith("USD") and len(normalized) >= 6

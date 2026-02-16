@@ -168,6 +168,12 @@ def run() -> int:
     if args.backtest_cash is not None and args.backtest_cash <= 0:
         print("Configuration error: --backtest-cash must be a positive number.")
         return 2
+    if args.backtest and not args.strategy:
+        print(
+            "Configuration error: --backtest requires --strategy "
+            "(example: --strategy sma_crossover)."
+        )
+        return 2
 
     try:
         settings = apply_cli_overrides(Settings.from_env(), args)

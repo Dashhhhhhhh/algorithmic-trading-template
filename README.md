@@ -116,7 +116,8 @@ python -m app.main --once --live
 python -m app.main --strategy hft_pulse --interval-seconds 15 --live
 python -m app.main --strategy hft_pulse --interval-seconds 5 --max-passes 20 --dry-run
 python -m app.main --data-source alpaca --timeframe 1Min --live
-python -m app.main --backtest --data-source csv --historical-dir historical_data
+python -m app.main --backtest --strategy sma_crossover --data-source csv --historical-dir historical_data
+python -m app.main --backtest --strategy sma_crossover --data-source csv --historical-dir historical_data --symbols EQUITIES:SPY,CRYPTO:BTCUSD
 ```
 
 Notes:
@@ -124,6 +125,7 @@ Notes:
 - `--live` disables dry run and submits orders to `ALPACA_BASE_URL`.
 - Trading mode always uses Alpaca live pricing for strategy decisions.
 - `--backtest --data-source csv` runs historical simulation and does not place broker orders.
+- Backtest mode requires explicit strategy selection via `--strategy ...`.
 - Without `--once`, the bot runs continuously until Ctrl+C.
 - `--interval-seconds` controls delay between polling passes (default from `LOOP_INTERVAL_SECONDS`).
 - `--max-passes` is useful for short demos/tests of loop mode.
@@ -134,6 +136,7 @@ Notes:
 
 CSV format for backtesting:
 - File path: `{HISTORICAL_DATA_DIR}/{SYMBOL}.csv`
+- Optional market path: `{HISTORICAL_DATA_DIR}/{MARKET}/{SYMBOL}.csv` with symbol key `MARKET:SYMBOL` (example: `CRYPTO:BTCUSD`)
 - Required columns: `date,open,high,low,close,volume`
 
 ## Strategy

@@ -40,7 +40,7 @@ class OrderRequest:
     """Request model for market orders."""
 
     symbol: str
-    qty: int
+    qty: float
     side: OrderSide
     type: str = "market"
     time_in_force: str = "day"

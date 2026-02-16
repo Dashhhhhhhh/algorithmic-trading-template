@@ -51,6 +51,35 @@ class AlpacaDataClient:
         timeframe = self._normalize_timeframe(self.timeframe)
         end_time = datetime.now(timezone.utc)
         start_time = end_time - timedelta(days=self.lookback_days)
+        if self._is_crypto_symbol(symbol):
+            bars = self._fetch_crypto_bars(
+                symbol=symbol,
+                timeframe=timeframe,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        else:
+            bars = self._fetch_stock_bars(
+                symbol=symbol,
+                timeframe=timeframe,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        if not bars:
+            raise DataProviderError(f"Alpaca data returned no bars for {symbol}.")
+
+        frame = self._bars_to_frame(symbol=symbol, bars=bars)
+        if frame.empty:
+            raise DataProviderError(f"Alpaca bars for {symbol} were empty after parsing.")
+        return frame
+
+    def _fetch_stock_bars(
+        self,
+        symbol: str,
+        timeframe: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> list[dict]:
         path = f"/v2/stocks/{symbol}/bars"
         params = {
             "timeframe": timeframe,
@@ -61,12 +90,45 @@ class AlpacaDataClient:
             "end": end_time.isoformat(),
             "sort": "asc",
         }
-
         payload = self._request_with_retry(path=path, params=params)
         bars = payload.get("bars", [])
-        if not bars:
-            raise DataProviderError(f"Alpaca data returned no bars for {symbol}.")
+        return bars if isinstance(bars, list) else []
 
+    def _fetch_crypto_bars(
+        self,
+        symbol: str,
+        timeframe: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> list[dict]:
+        pair = self._to_alpaca_crypto_symbol(symbol)
+        path = "/v1beta3/crypto/us/bars"
+        params = {
+            "symbols": pair,
+            "timeframe": timeframe,
+            "limit": str(self.limit),
+            "start": start_time.isoformat(),
+            "end": end_time.isoformat(),
+            "sort": "asc",
+        }
+        payload = self._request_with_retry(path=path, params=params)
+        raw_bars = payload.get("bars", {})
+
+        if isinstance(raw_bars, dict):
+            bars = raw_bars.get(pair)
+            if bars is None:
+                bars = raw_bars.get(pair.replace("/", ""))
+            if bars is None and len(raw_bars) == 1:
+                bars = next(iter(raw_bars.values()))
+            return bars if isinstance(bars, list) else []
+
+        if isinstance(raw_bars, list):
+            return raw_bars
+
+        return []
+
+    @staticmethod
+    def _bars_to_frame(symbol: str, bars: list[dict]) -> pd.DataFrame:
         frame = pd.DataFrame(bars)
         required = {"o", "h", "l", "c", "v", "t"}
         if not required.issubset(frame.columns):
@@ -85,10 +147,26 @@ class AlpacaDataClient:
         frame.index = pd.to_datetime(frame["time"], utc=False)
         frame = frame.sort_index()
         frame = frame[["open", "high", "low", "close", "volume"]]
-        frame = frame.apply(pd.to_numeric, errors="coerce").dropna()
-        if frame.empty:
-            raise DataProviderError(f"Alpaca bars for {symbol} were empty after parsing.")
-        return frame
+        return frame.apply(pd.to_numeric, errors="coerce").dropna()
+
+    @staticmethod
+    def _is_crypto_symbol(symbol: str) -> bool:
+        compact = symbol.strip().upper().replace("/", "").replace("-", "")
+        if compact.endswith("USDT") and len(compact) >= 7:
+            return True
+        if compact.endswith("USD") and len(compact) >= 6:
+            return True
+        return False
+
+    @staticmethod
+    def _to_alpaca_crypto_symbol(symbol: str) -> str:
+        compact = symbol.strip().upper().replace("/", "").replace("-", "")
+        if compact.endswith("USDT"):
+            compact = f"{compact[:-4]}USD"
+        if not compact.endswith("USD") or len(compact) <= 3:
+            return symbol.strip().upper()
+        base = compact[:-3]
+        return f"{base}/USD"
 
     def _request_with_retry(self, path: str, params: dict[str, str]) -> dict:
         url = f"{self.data_base_url}{path}"
