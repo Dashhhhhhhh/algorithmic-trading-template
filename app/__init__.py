@@ -1,2 +1,0 @@
-"""Algorithmic trading boilerplate package."""
-

@@ -1,192 +1,78 @@
-# Bare-Bones Algorithmic Trading Boilerplate (Python)
+# algotrade
 
-Minimal, beginner-friendly starter for a student club.  
-This project runs one end-to-end pass:
-1. Fetch live market data from Alpaca
-2. Generate a toy signal (`sma_crossover` or `hft_pulse`)
-3. Send market orders to Alpaca (or simulate in dry run)
-4. Log each step clearly
-5. Repeat continuously like a live bot (unless `--once` is used)
+Minimal algorithmic trading boilerplate with a `src` layout, stable target-position strategy contracts, backtest and Alpaca paper/live modes, JSONL event logs, and per-run Plotly reports.
 
-## Project Structure
+## Installation with uv
+
+```bash
+uv sync --dev
+```
+
+## Project layout
 
 ```text
-.
-├── .env.example
-├── README.md
-├── requirements.txt
-├── app
-│   ├── __init__.py
-│   ├── config.py
-│   ├── backtest.py
-│   ├── logging_utils.py
-│   ├── main.py
-│   ├── broker
-│   │   ├── __init__.py
-│   │   ├── alpaca.py
-│   │   └── models.py
-│   ├── data
-│   │   ├── __init__.py
-│   │   ├── alpaca_data.py
-│   │   ├── base.py
-│   │   ├── csv_data.py
-│   │   └── models.py
-│   ├── execution
-│   │   ├── __init__.py
-│   │   └── trader.py
-│   ├── strategy
-│   │   ├── __init__.py
-│   │   ├── base.py
-│   │   ├── hft_pulse.py
-│   │   └── sma_crossover.py
-│   └── utils
-│       ├── __init__.py
-│       ├── errors.py
-│       └── time.py
-└── tests
-    ├── test_backtest.py
-    ├── test_cli_overrides.py
-    ├── test_csv_data.py
-    ├── test_hft_pulse.py
-    ├── test_runtime_validation.py
-    ├── test_trader_open_orders.py
-    ├── test_trader_order_logic.py
-    └── test_sma_crossover.py
+src/algotrade/
+  cli.py
+  config.py
+  runtime.py
+  domain/
+  data/
+  brokers/
+  strategies/
+  execution/
+  logging/
+  state/
+tests/
 ```
 
-## Requirements
+## Run backtest mode
 
-- Python 3.11+
-- Alpaca account + API keys (paper account recommended)
-
-Install dependencies:
+Backtest defaults to CSV data via `historical_data`.
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+uv run algotrade --mode backtest --strategy sma_crossover --symbols SPY --once
 ```
 
-## Configuration
+## Run paper mode
 
-Copy and edit:
+Paper and live modes share the Alpaca broker implementation and use `ALPACA_BASE_URL` to choose endpoint behavior.
 
 ```bash
-cp .env.example .env
+uv run algotrade --mode paper --strategy momentum --symbols SPY --once
 ```
 
-Required variables by mode:
-- Live/paper trading mode: `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`
-- CSV backtest mode: no API key is required
-
-Key defaults:
-- `ALPACA_BASE_URL=https://paper-api.alpaca.markets`
-- `ALPACA_DATA_URL=https://data.alpaca.markets`
-- `SYMBOLS=SPY`
-- `<STRATEGY_NAME>_SYMBOLS` (optional per-strategy universe override, e.g. `HFT_PULSE_SYMBOLS=SPY,QQQ`)
-- `DATA_SOURCE=alpaca`
-- `HISTORICAL_DATA_DIR=historical_data`
-- `STRATEGY=sma_crossover`
-- `DRY_RUN=true`
-- `ALLOW_SHORT=true`
-- `ORDER_QTY=1`
-- `LOOP_INTERVAL_SECONDS=5`
-- `BACKTEST_STARTING_CASH=100000`
-
-## Run
-
-Run continuously (live bot behavior):
+## Run live mode
 
 ```bash
-python -m app.main --strategy hft_pulse --symbols SPY --qty 1 --live
+uv run algotrade --mode live --strategy momentum --symbols SPY --continuous
 ```
 
-Run once:
+## Add a new strategy
 
-```bash
-python -m app.main --once
-```
+1. Copy `/Users/dashdunmire/Documents/algotrade/boilerplate/src/algotrade/strategies/strategy_template.py` to a new module in `/Users/dashdunmire/Documents/algotrade/boilerplate/src/algotrade/strategies/`.
+2. Set a stable `strategy_id` and implement `decide_targets(bars_by_symbol, portfolio_snapshot) -> dict[str, int]`.
+3. Register the factory in `/Users/dashdunmire/Documents/algotrade/boilerplate/src/algotrade/strategies/registry.py`.
 
-CLI overrides (examples):
+## Logging and dashboards
 
-```bash
-python -m app.main --once --symbols SPY,AAPL --dry-run
-python -m app.main --once --symbols SPY --qty 2
-python -m app.main --once --live
-python -m app.main --strategy hft_pulse --interval-seconds 15 --live
-python -m app.main --strategy hft_pulse --interval-seconds 5 --max-passes 20 --dry-run
-python -m app.main --data-source alpaca --timeframe 1Min --live
-python -m app.main --backtest --strategy sma_crossover --data-source csv --historical-dir historical_data
-python -m app.main --backtest --strategy sma_crossover --data-source csv --historical-dir historical_data --symbols EQUITIES:SPY,CRYPTO:BTCUSD
-```
+Each run writes output under `/Users/dashdunmire/Documents/algotrade/boilerplate/runs/<run_id>/`:
 
-Notes:
-- `--dry-run` prints intended orders and does not send them.
-- `--live` disables dry run and submits orders to `ALPACA_BASE_URL`.
-- Trading mode always uses Alpaca live pricing for strategy decisions.
-- `--backtest --data-source csv` runs historical simulation and does not place broker orders.
-- Backtest mode requires explicit strategy selection via `--strategy ...`.
-- Without `--once`, the bot runs continuously until Ctrl+C.
-- `--interval-seconds` controls delay between polling passes (default from `LOOP_INTERVAL_SECONDS`).
-- `--max-passes` is useful for short demos/tests of loop mode.
-- With `ALLOW_SHORT=true`, SELL signals can open short positions when flat.
-- Account day P/L is shown each pass in green/red in a real terminal.
-- Order logs include `est_notional` and fill amounts (`filled_qty`, `filled_avg`, `filled_notional`).
-- Keep `ALPACA_BASE_URL` on paper endpoint for safe practice.
+- `events.jsonl` with schema `ts, run_id, mode, strategy_id, event_type, payload`
+- `report.html` interactive Plotly event timeline and counts
 
-CSV format for backtesting:
-- File path: `{HISTORICAL_DATA_DIR}/{SYMBOL}.csv`
-- Optional market path: `{HISTORICAL_DATA_DIR}/{MARKET}/{SYMBOL}.csv` with symbol key `MARKET:SYMBOL` (example: `CRYPTO:BTCUSD`)
-- Required columns: `date,open,high,low,close,volume`
+Human console logs emit only these line types:
 
-## Strategy
+- `run_started`
+- `decision`
+- `order_submit`
+- `order_update`
+- `error`
 
-Strategies are loaded dynamically from files in `app/strategy/`.
-To make a strategy discoverable, add a module with:
-- `STRATEGY_NAME = "your_name"` (optional; filename is used if omitted)
-- `build_strategy(settings) -> Strategy`
+## CI
 
-Universe selection:
-- Global fallback: `SYMBOLS=SPY,AAPL`
-- Strategy-specific override: `<STRATEGY_NAME>_SYMBOLS=...`
-- Example: `HFT_PULSE_SYMBOLS=SPY,QQQ`
+GitHub Actions workflow is at `/Users/dashdunmire/Documents/algotrade/boilerplate/.github/workflows/ci.yml` and runs:
 
-Included strategies:
-- **SMA crossover**
-  - BUY when short SMA crosses above long SMA
-  - SELL when short SMA crosses below long SMA
-  - HOLD otherwise
-- **HFT pulse (demo)**
-  - If short-term momentum is strong, follow momentum
-  - If momentum is weak, alternate BUY/SELL on a clock interval
-  - Designed to produce frequent action for demos; not production HFT
-
-Parameters:
-- `SMA_SHORT_WINDOW` (default `20`)
-- `SMA_LONG_WINDOW` (default `50`)
-- `HFT_MOMENTUM_WINDOW` (default `3`)
-- `HFT_VOLATILITY_WINDOW` (default `12`)
-- `HFT_MIN_VOLATILITY` (default `0.0005`)
-- `HFT_FLIP_SECONDS` (default `3`)
-
-Entertaining demo loop (intentional frequent trades):
-
-```bash
-for i in {1..6}; do
-  python -m app.main --once --strategy hft_pulse --symbols SPY --qty 1 --live
-  sleep 1
-done
-```
-
-## Logging
-
-Logs always go to console.  
-Optional file logging:
-- set `LOG_FILE=logs/trader.log` in `.env`
-
-## Club Extension Ideas
-
-- Add position sizing based on risk (e.g., % of buying power)
-- Add more strategies under `app/strategy/`
-- Add a scheduler externally (cron, systemd timer, GitHub Actions, etc.)
-- Add portfolio-level risk controls before order submission
+- `uv sync --dev`
+- `uv run ruff check .`
+- `uv run ruff format --check .`
+- `uv run pytest -q`
