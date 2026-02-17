@@ -112,7 +112,7 @@ class Settings:
             return False
         if self.continuous:
             return True
-        return True
+        return self.mode in {"paper", "live"}
 
     def effective_data_source(self) -> str:
         """Resolve mode-aware data source defaults."""

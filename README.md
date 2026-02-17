@@ -30,12 +30,13 @@ tests/
 Backtest defaults to CSV data via `historical_data`.
 
 ```bash
-uv run algotrade --mode backtest --strategy sma_crossover --symbols SPY --once
+uv run algotrade --mode backtest --strategy sma_crossover
 ```
 
 ## Run paper mode
 
 Paper and live modes share the Alpaca broker implementation and use `ALPACA_BASE_URL` to choose endpoint behavior.
+They default to continuous operation unless `--once` is provided.
 
 ```bash
 uv run algotrade --mode paper --strategy momentum --symbols SPY --once
@@ -67,6 +68,8 @@ Human console logs emit only these line types:
 - `order_submit`
 - `order_update`
 - `error`
+
+Backtest runs include richer `decision` fields for analysis (for example `asof`, `bars`, `close`, `ret_1`, `ret_lb`, `volume`, `delta_qty`) and emit `cycle_summary` events in `events.jsonl` with pre/post submit snapshots.
 
 ## CI
 

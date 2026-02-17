@@ -49,3 +49,23 @@ def test_cli_rejects_once_and_continuous_together() -> None:
 
     with pytest.raises(ValueError):
         apply_cli_overrides(Settings(), args)
+
+
+def test_backtest_defaults_to_single_cycle_without_flags() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--mode", "backtest"])
+    settings = apply_cli_overrides(Settings(), args)
+
+    assert settings.once is False
+    assert settings.continuous is False
+    assert settings.should_run_continuously() is False
+
+
+def test_paper_defaults_to_continuous_without_flags() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--mode", "paper"])
+    settings = apply_cli_overrides(Settings(), args)
+
+    assert settings.once is False
+    assert settings.continuous is False
+    assert settings.should_run_continuously() is True

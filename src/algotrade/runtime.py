@@ -154,21 +154,34 @@ def execute_cycle(
     positions = broker.get_positions()
     bars_by_symbol = build_bars_by_symbol(settings.symbols, data_provider)
     targets = strategy.decide_targets(bars_by_symbol, portfolio)
+    decision_details: dict[str, dict[str, Any]] = {}
 
     for symbol, target in sorted(targets.items()):
         current_qty = positions.get(symbol, Position(symbol=symbol, qty=0)).qty
-        human_logger.decision(symbol, target, current_qty)
+        payload: dict[str, Any] = {
+            "symbol": symbol,
+            "target_qty": target,
+            "current_qty": current_qty,
+        }
+        if settings.mode == "backtest":
+            details = summarize_backtest_decision(
+                bars=bars_by_symbol.get(symbol),
+                lookback_bars=settings.momentum_lookback_bars,
+                target_qty=target,
+                current_qty=current_qty,
+            )
+            decision_details[symbol] = details
+            human_logger.decision(symbol, target, current_qty, details=details)
+            payload.update(details)
+        else:
+            human_logger.decision(symbol, target, current_qty)
         event_sink.emit(
             TradeEvent(
                 run_id=run_id,
                 mode=settings.mode,
                 strategy_id=strategy.strategy_id,
                 event_type="decision",
-                payload={
-                    "symbol": symbol,
-                    "target_qty": target,
-                    "current_qty": current_qty,
-                },
+                payload=payload,
             )
         )
 
@@ -192,8 +205,43 @@ def execute_cycle(
         settings=settings,
         strategy=strategy,
     )
+    if settings.mode == "backtest":
+        event_sink.emit(
+            TradeEvent(
+                run_id=run_id,
+                mode=settings.mode,
+                strategy_id=strategy.strategy_id,
+                event_type="cycle_summary",
+                payload={
+                    "stage": "pre_submit",
+                    "portfolio": serialize_portfolio(portfolio),
+                    "positions": serialize_positions(positions),
+                    "targets": dict(sorted(targets.items())),
+                    "decisions": decision_details,
+                    "raw_orders": serialize_orders(raw_orders),
+                    "risk_orders": serialize_orders(orders),
+                    "prepared_orders": serialize_orders(prepared_orders),
+                    "duplicate_blocked_count": max(0, len(orders) - len(prepared_orders)),
+                },
+            )
+        )
 
     if not prepared_orders:
+        if settings.mode == "backtest":
+            event_sink.emit(
+                TradeEvent(
+                    run_id=run_id,
+                    mode=settings.mode,
+                    strategy_id=strategy.strategy_id,
+                    event_type="cycle_summary",
+                    payload={
+                        "stage": "post_submit",
+                        "submitted_order_count": 0,
+                        "positions_after": serialize_positions(broker.get_positions()),
+                        "portfolio_after": serialize_portfolio(broker.get_portfolio()),
+                    },
+                )
+            )
         return
 
     receipts = broker.submit_orders(prepared_orders)
@@ -218,6 +266,22 @@ def execute_cycle(
                     "side": receipt.side.value,
                     "qty": receipt.qty,
                     "status": receipt.status,
+                },
+            )
+        )
+    if settings.mode == "backtest":
+        event_sink.emit(
+            TradeEvent(
+                run_id=run_id,
+                mode=settings.mode,
+                strategy_id=strategy.strategy_id,
+                event_type="cycle_summary",
+                payload={
+                    "stage": "post_submit",
+                    "submitted_order_count": len(receipts),
+                    "receipts": serialize_receipts(receipts),
+                    "positions_after": serialize_positions(broker.get_positions()),
+                    "portfolio_after": serialize_portfolio(broker.get_portfolio()),
                 },
             )
         )
@@ -276,6 +340,101 @@ def prepare_orders(
 def build_client_order_id(run_id: str, index: int, symbol: str) -> str:
     """Generate stable client order id format."""
     return f"{run_id[:10]}-{symbol.upper()}-{index}"
+
+
+def summarize_backtest_decision(
+    bars: Any,
+    lookback_bars: int,
+    target_qty: int,
+    current_qty: int,
+) -> dict[str, Any]:
+    """Build per-symbol diagnostics used in backtest analysis."""
+    details: dict[str, Any] = {
+        "delta_qty": target_qty - current_qty,
+    }
+    if bars is None:
+        return details
+    try:
+        bar_count = int(len(bars))
+    except TypeError:
+        return details
+    details["bars"] = bar_count
+    if bar_count <= 0 or not hasattr(bars, "columns"):
+        return details
+    if "close" not in bars.columns:
+        return details
+
+    close = bars["close"]
+    latest_close = float(close.iloc[-1])
+    details["close"] = round(latest_close, 6)
+
+    index = getattr(bars, "index", None)
+    if index is not None and len(index) > 0:
+        last_index = index[-1]
+        details["asof"] = (
+            last_index.isoformat() if hasattr(last_index, "isoformat") else str(last_index)
+        )
+
+    if "volume" in bars.columns:
+        details["volume"] = float(bars["volume"].iloc[-1])
+
+    if bar_count > 1:
+        previous_close = float(close.iloc[-2])
+        if previous_close != 0:
+            details["ret_1"] = round((latest_close - previous_close) / previous_close, 6)
+
+    if lookback_bars > 0 and bar_count > lookback_bars:
+        reference_close = float(close.iloc[-1 - lookback_bars])
+        if reference_close != 0:
+            details["ret_lb"] = round((latest_close - reference_close) / reference_close, 6)
+
+    return details
+
+
+def serialize_positions(positions: dict[str, Position]) -> dict[str, int]:
+    """Convert position objects into a deterministic, JSON-friendly mapping."""
+    return {symbol: position.qty for symbol, position in sorted(positions.items())}
+
+
+def serialize_portfolio(portfolio: Any) -> dict[str, Any]:
+    """Convert a portfolio snapshot into a stable event payload."""
+    return {
+        "cash": round(float(portfolio.cash), 4),
+        "equity": round(float(portfolio.equity), 4),
+        "buying_power": round(float(portfolio.buying_power), 4),
+        "positions": serialize_positions(getattr(portfolio, "positions", {})),
+    }
+
+
+def serialize_orders(orders: list[OrderRequest]) -> list[dict[str, Any]]:
+    """Convert order requests into structured event payloads."""
+    return [
+        {
+            "symbol": order.symbol,
+            "side": order.side.value,
+            "qty": order.qty,
+            "order_type": order.order_type,
+            "time_in_force": order.time_in_force,
+            "client_order_id": order.client_order_id,
+        }
+        for order in orders
+    ]
+
+
+def serialize_receipts(receipts: list[Any]) -> list[dict[str, Any]]:
+    """Convert broker receipts into structured event payloads."""
+    return [
+        {
+            "order_id": receipt.order_id,
+            "symbol": receipt.symbol,
+            "side": receipt.side.value,
+            "qty": receipt.qty,
+            "status": receipt.status,
+            "client_order_id": receipt.client_order_id,
+            "raw": receipt.raw,
+        }
+        for receipt in receipts
+    ]
 
 
 def build_bars_by_symbol(symbols: list[str], data_provider: MarketDataProvider) -> dict[str, Any]:

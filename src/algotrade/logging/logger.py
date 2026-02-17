@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
+from typing import Any
 
 
 class HumanLogger:
@@ -33,7 +35,23 @@ class HumanLogger:
             ",".join(symbols),
         )
 
-    def decision(self, symbol: str, target_qty: int, current_qty: int) -> None:
+    def decision(
+        self,
+        symbol: str,
+        target_qty: int,
+        current_qty: int,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        if details:
+            fields = " ".join(f"{key}={details[key]}" for key in sorted(details))
+            self._logger.info(
+                "decision symbol=%s target=%s current=%s %s",
+                symbol,
+                target_qty,
+                current_qty,
+                fields,
+            )
+            return
         self._logger.info(
             "decision symbol=%s target=%s current=%s",
             symbol,
