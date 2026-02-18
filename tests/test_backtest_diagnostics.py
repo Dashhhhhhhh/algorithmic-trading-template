@@ -21,6 +21,7 @@ from algotrade.runtime import (
     serialize_receipts,
     summarize_decision_details,
 )
+from algotrade.strategies.scalping import ScalpingParams, ScalpingStrategy
 
 
 def test_summarize_decision_details_includes_price_return_and_delta() -> None:
@@ -161,3 +162,38 @@ def test_resolve_target_quantities_in_notional_mode() -> None:
     )
 
     assert targets == {"BTCUSD": 0.002, "ETHUSD": -0.08}
+
+
+def test_resolve_target_quantities_uses_strategy_trade_size_percent_bounds() -> None:
+    settings = Settings(
+        order_sizing_method="notional",
+        order_notional_usd=100.0,
+        min_trade_qty=0.0001,
+        qty_precision=6,
+    )
+    strategy = ScalpingStrategy(
+        ScalpingParams(
+            lookback_bars=2,
+            threshold=0.0005,
+            max_abs_qty=2.0,
+            min_trade_size_pct=0.05,
+            max_trade_size_pct=0.10,
+            allow_short=False,
+        )
+    )
+    portfolio = PortfolioSnapshot(
+        cash=100_000.0,
+        equity=100_000.0,
+        buying_power=100_000.0,
+        positions={},
+    )
+    targets = resolve_target_quantities(
+        signal_targets={"BTCUSD": 2.0},
+        latest_prices={"BTCUSD": 50_000.0},
+        settings=settings,
+        strategy=strategy,
+        portfolio_snapshot=portfolio,
+    )
+
+    # 0.10% of $100,000 = $100 notional => 0.002 BTC at $50,000.
+    assert targets == {"BTCUSD": 0.002}

@@ -62,3 +62,16 @@ def test_compute_orders_handles_fractional_deltas() -> None:
     assert orders[0].symbol == "BTCUSD"
     assert orders[0].side is OrderSide.SELL
     assert orders[0].qty == 0.998
+
+
+def test_compute_orders_truncates_fractional_qty_to_avoid_oversell() -> None:
+    orders = compute_orders(
+        current_positions={"BTCUSD": Position(symbol="BTCUSD", qty=0.001035924)},
+        targets={"BTCUSD": 0.0},
+        default_order_type="market",
+        qty_precision=6,
+    )
+
+    assert len(orders) == 1
+    assert orders[0].side is OrderSide.SELL
+    assert orders[0].qty == 0.001035

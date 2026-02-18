@@ -49,21 +49,18 @@ class HumanLogger:
         client_order_id: str,
         details: Mapping[str, Any] | None = None,
     ) -> None:
+        _ = client_order_id
         normalized_side = side.strip().lower()
         buy_amount = qty if normalized_side == "buy" else 0.0
         sell_amount = qty if normalized_side == "sell" else 0.0
         parts = [
             f"submit | {symbol} | buy_amount {self._format_qty(buy_amount)} "
-            f"| sell_amount {self._format_qty(sell_amount)} "
-            f"| cid {self._short_id(client_order_id)}"
+            f"| sell_amount {self._format_qty(sell_amount)}"
         ]
         if details:
             reference_price = self._as_float(details.get("reference_price"))
-            est_notional = self._as_float(details.get("est_notional"))
             if reference_price is not None:
                 parts.append(f"ref ${reference_price:,.3f}")
-            if est_notional is not None:
-                parts.append(f"est ${est_notional:,.2f}")
         self._logger.info(" | ".join(parts))
 
     def order_update(
@@ -73,22 +70,16 @@ class HumanLogger:
         client_order_id: str | None = None,
         details: Mapping[str, Any] | None = None,
     ) -> None:
+        _ = client_order_id
         if str(order_id).lower() in {"risk", "dedupe", "reconcile", "portfolio"}:
             return None
         if str(status).lower() in {"stale_reconciled", "duplicate_blocked"}:
             return None
-        parts = [
-            f"update | order {self._short_id(order_id)} | {self._human_status(status)}",
-        ]
-        if client_order_id:
-            parts.append(f"cid {self._short_id(client_order_id)}")
+        parts = [f"update | {self._human_status(status)}"]
         if details:
             filled_price = self._as_float(details.get("filled_avg_price"))
-            filled_notional = self._as_float(details.get("filled_notional"))
             if filled_price is not None:
                 parts.append(f"fill ${filled_price:,.3f}")
-            if filled_notional is not None:
-                parts.append(f"notional ${filled_notional:,.2f}")
             event_time = (
                 details.get("filled_at")
                 or details.get("updated_at")
@@ -156,6 +147,24 @@ class HumanLogger:
     def error(self, message: str) -> None:
         self._logger.error("error | %s", message)
 
+    def run_pnl(
+        self,
+        equity: float,
+        pnl: float,
+        pnl_pct: float,
+        start_equity: float | None = None,
+    ) -> None:
+        if start_equity is None:
+            start_equity = equity - pnl
+        self._logger.info(
+            "pnl | session_start_equity $%s | session_end_equity $%s "
+            "| session_pnl %s | session_pnl%% %s",
+            f"{start_equity:,.2f}",
+            f"{equity:,.2f}",
+            f"{pnl:+,.2f}",
+            f"{pnl_pct * 100.0:+,.3f}%",
+        )
+
     @staticmethod
     def _short_id(value: str | None, head: int = 10, tail: int = 6) -> str:
         if not value:
@@ -208,6 +217,7 @@ class HumanLogger:
             "pending_new": "pending",
             "submitted": "submitted",
             "filled_reconciled": "filled",
+            "closed_reconciled": "closed",
             "stale_reconciled": "stale",
             "duplicate_blocked": "blocked: duplicate",
         }

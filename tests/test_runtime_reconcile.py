@@ -26,6 +26,28 @@ def test_resolve_intent_status_marks_stale_when_not_open_and_not_filled() -> Non
     assert status == "stale_reconciled"
 
 
+def test_resolve_intent_status_prefers_broker_filled_status() -> None:
+    intent = OrderIntentRecord(
+        client_order_id="cid-1",
+        run_id="run-1",
+        symbol="BTCUSD",
+        side="buy",
+        qty=0.001037,
+        status="submitted",
+        broker_order_id="oid-1",
+        fingerprint="BTCUSD|buy|0.001037",
+    )
+
+    status = resolve_intent_status(
+        intent=intent,
+        open_client_ids=set(),
+        positions={"BTCUSD": Position(symbol="BTCUSD", qty=0.00103585)},
+        broker_status="filled",
+    )
+
+    assert status == "filled_reconciled"
+
+
 def test_resolve_intent_status_keeps_submitted_when_open() -> None:
     intent = OrderIntentRecord(
         client_order_id="cid-1",

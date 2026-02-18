@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from algotrade.domain.models import PortfolioSnapshot
+from algotrade.domain.models import PortfolioSnapshot, Position
 from algotrade.strategies.momentum import MomentumParams, MomentumStrategy
 from algotrade.strategies.scalping import ScalpingParams, ScalpingStrategy
 from algotrade.strategies.sma_crossover import SmaCrossoverParams, SmaCrossoverStrategy
@@ -10,6 +10,15 @@ from algotrade.strategies.sma_crossover import SmaCrossoverParams, SmaCrossoverS
 
 def _snapshot() -> PortfolioSnapshot:
     return PortfolioSnapshot(cash=1000.0, equity=1000.0, buying_power=1000.0, positions={})
+
+
+def _snapshot_with_position(symbol: str, qty: float) -> PortfolioSnapshot:
+    return PortfolioSnapshot(
+        cash=1000.0,
+        equity=1000.0,
+        buying_power=1000.0,
+        positions={symbol: Position(symbol=symbol, qty=qty)},
+    )
 
 
 def test_sma_crossover_returns_deterministic_targets() -> None:
@@ -53,6 +62,18 @@ def test_scalping_returns_signal_based_target_when_move_exceeds_threshold() -> N
 
     assert bullish_targets == {"SPY": 2}
     assert bearish_targets == {"SPY": -2}
+
+    exit_bullish_targets = strategy.decide_targets(
+        {"SPY": bullish},
+        _snapshot_with_position("SPY", 2),
+    )
+    exit_bearish_targets = strategy.decide_targets(
+        {"SPY": bearish},
+        _snapshot_with_position("SPY", -2),
+    )
+
+    assert exit_bullish_targets == {"SPY": 0}
+    assert exit_bearish_targets == {"SPY": 0}
 
 
 def test_scalping_returns_flat_when_signal_is_weak() -> None:

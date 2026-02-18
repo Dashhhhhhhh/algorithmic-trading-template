@@ -18,6 +18,9 @@ class SmaCrossoverParams:
     short_window: int = 20
     long_window: int = 50
     target_qty: float = 1.0
+    # Percentage points of equity per position target (0.10 = 0.10%).
+    min_trade_size_pct: float = 0.05
+    max_trade_size_pct: float = 0.10
 
 
 def default_sma_crossover_params() -> SmaCrossoverParams:
@@ -37,6 +40,12 @@ class SmaCrossoverStrategy(Strategy):
             raise ValueError("short_window must be less than long_window")
         if params.target_qty <= 0:
             raise ValueError("target_qty must be positive")
+        if params.min_trade_size_pct <= 0 or params.max_trade_size_pct <= 0:
+            raise ValueError("trade size percentages must be positive")
+        if params.min_trade_size_pct > params.max_trade_size_pct:
+            raise ValueError("min_trade_size_pct must be <= max_trade_size_pct")
+        if params.max_trade_size_pct > 100:
+            raise ValueError("max_trade_size_pct must be <= 100")
         self.params = params
 
     def decide_targets(

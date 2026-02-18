@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from time import sleep
+from time import monotonic, sleep
 from typing import Any
 
 import requests
@@ -22,6 +22,15 @@ from algotrade.domain.models import (
 
 class AlpacaPaperBroker:
     """REST broker wrapper with retry and rate-limit handling."""
+    _PENDING_ORDER_STATUSES = {
+        "accepted",
+        "pending_new",
+        "new",
+        "accepted_for_bidding",
+        "pending_replace",
+        "pending_cancel",
+        "calculated",
+    }
 
     def __init__(
         self,
@@ -125,20 +134,29 @@ class AlpacaPaperBroker:
             if request.client_order_id:
                 body["client_order_id"] = request.client_order_id
             payload = self._request("POST", "/v2/orders", json=body)
+            final_payload = self._wait_for_order_progress(payload)
             receipt = OrderReceipt(
-                order_id=str(payload.get("id", "")),
-                symbol=str(payload.get("symbol", request.symbol)).upper(),
-                side=self._to_order_side(str(payload.get("side", request.side.value))),
-                qty=float(payload.get("qty", request.qty)),
-                status=str(payload.get("status", "submitted")),
+                order_id=str(final_payload.get("id", "")),
+                symbol=str(final_payload.get("symbol", request.symbol)).upper(),
+                side=self._to_order_side(str(final_payload.get("side", request.side.value))),
+                qty=float(final_payload.get("qty", request.qty)),
+                status=str(final_payload.get("status", "submitted")),
                 client_order_id=(
-                    str(payload.get("client_order_id", request.client_order_id or ""))
+                    str(final_payload.get("client_order_id", request.client_order_id or ""))
                     or request.client_order_id
                 ),
-                raw=payload if isinstance(payload, dict) else {},
+                raw=final_payload if isinstance(final_payload, dict) else {},
             )
             receipts.append(receipt)
         return receipts
+
+    def get_order_status(self, order_id: str) -> str | None:
+        """Fetch latest status for a broker order id."""
+        payload = self._request("GET", f"/v2/orders/{order_id}")
+        if not isinstance(payload, dict):
+            return None
+        status = str(payload.get("status", "")).strip().lower()
+        return status or None
 
     def close_all_positions(self, cancel_orders: bool = True) -> list[dict[str, Any]]:
         """Close every open position using Alpaca's server-side liquidation endpoint."""
@@ -207,6 +225,36 @@ class AlpacaPaperBroker:
         if last_error is not None:
             raise ValueError(f"Alpaca request failed for {path}: {last_error}") from last_error
         raise ValueError(f"Alpaca request failed for {path}")
+
+    def _wait_for_order_progress(
+        self,
+        payload: Any,
+        timeout_seconds: float = 6.0,
+        poll_seconds: float = 0.5,
+    ) -> Any:
+        """Poll order status briefly so logs move past immediate pending states."""
+        if not isinstance(payload, dict):
+            return payload
+        order_id = str(payload.get("id", "")).strip()
+        status = str(payload.get("status", "")).strip().lower()
+        if not order_id or status not in self._PENDING_ORDER_STATUSES:
+            return payload
+
+        latest: Any = payload
+        deadline = monotonic() + max(timeout_seconds, 0.0)
+        while monotonic() < deadline:
+            sleep(max(poll_seconds, 0.1))
+            try:
+                candidate = self._request("GET", f"/v2/orders/{order_id}")
+            except ValueError:
+                break
+            if not isinstance(candidate, dict):
+                continue
+            latest = candidate
+            candidate_status = str(candidate.get("status", "")).strip().lower()
+            if candidate_status and candidate_status not in self._PENDING_ORDER_STATUSES:
+                break
+        return latest
 
     @staticmethod
     def normalize_symbol(symbol: str) -> str:

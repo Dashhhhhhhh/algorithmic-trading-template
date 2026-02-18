@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import ROUND_DOWN, Decimal
+
 from algotrade.domain.models import OrderRequest, OrderSide, PortfolioSnapshot, Position, RiskLimits
 from algotrade.execution.risk import filter_orders_by_limits
 
@@ -20,7 +22,7 @@ def compute_orders(
     for symbol, target_qty in sorted(targets.items()):
         current_qty = float(current_positions.get(symbol, Position(symbol=symbol, qty=0)).qty)
         delta = float(target_qty) - current_qty
-        qty = round(abs(delta), precision)
+        qty = _quantize_down(abs(delta), precision)
         if qty < normalized_min_trade_qty:
             continue
         side = OrderSide.BUY if delta > 0 else OrderSide.SELL
@@ -32,6 +34,17 @@ def compute_orders(
         )
         orders.append(request)
     return orders
+
+
+def _quantize_down(value: float, precision: int) -> float:
+    """Round toward zero at fixed precision to avoid oversizing fractional orders."""
+    if precision <= 0:
+        quantum = Decimal("1")
+    else:
+        quantum = Decimal("1").scaleb(-precision)
+    decimal_value = Decimal(str(max(value, 0.0)))
+    quantized = decimal_value.quantize(quantum, rounding=ROUND_DOWN)
+    return float(quantized)
 
 
 def apply_risk_gates(

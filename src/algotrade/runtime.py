@@ -17,7 +17,13 @@ from algotrade.data.alpaca_market_data import AlpacaMarketDataProvider
 from algotrade.data.base import MarketDataProvider
 from algotrade.data.csv_data import CsvDataProvider
 from algotrade.domain.events import TradeEvent
-from algotrade.domain.models import OrderRequest, OrderSide, Position, RiskLimits
+from algotrade.domain.models import (
+    OrderRequest,
+    OrderSide,
+    PortfolioSnapshot,
+    Position,
+    RiskLimits,
+)
 from algotrade.execution.engine import apply_risk_gates, compute_orders
 from algotrade.logging.event_sink import JsonlEventSink, generate_plotly_report
 from algotrade.logging.logger import HumanLogger
@@ -319,6 +325,21 @@ def run(settings: Settings) -> int:
         exit_code = 1
     finally:
         try:
+            try:
+                final_equity = float(broker.get_portfolio().equity)
+                start_equity = run_metrics.get("start_equity")
+                if start_equity is None:
+                    start_equity = final_equity
+                pnl = final_equity - float(start_equity)
+                pnl_pct = (pnl / float(start_equity)) if float(start_equity) else 0.0
+                human_logger.run_pnl(
+                    equity=final_equity,
+                    pnl=pnl,
+                    pnl_pct=pnl_pct,
+                    start_equity=float(start_equity),
+                )
+            except Exception:
+                pass
             generate_plotly_report(str(events_path), str(report_path))
         finally:
             state_store.close()
@@ -384,7 +405,13 @@ def execute_cycle(
     positions = broker.get_positions()
     pnl_metrics = compute_equity_metrics(run_metrics, float(portfolio.equity))
     signal_targets = strategy.decide_targets(bars_by_symbol, portfolio)
-    targets = resolve_target_quantities(signal_targets, latest_prices, settings)
+    targets = resolve_target_quantities(
+        signal_targets=signal_targets,
+        latest_prices=latest_prices,
+        settings=settings,
+        strategy=strategy,
+        portfolio_snapshot=portfolio,
+    )
     decision_details: dict[str, dict[str, Any]] = {}
     include_details = settings.mode == "backtest" or strategy.strategy_id == "scalping"
     lookback_bars = strategy_diagnostic_lookback_bars(strategy)
@@ -760,16 +787,36 @@ def resolve_target_quantities(
     signal_targets: dict[str, float],
     latest_prices: dict[str, float],
     settings: Settings,
+    strategy: Strategy | None = None,
+    portfolio_snapshot: PortfolioSnapshot | None = None,
 ) -> dict[str, float]:
     """Convert strategy targets into broker-facing position quantities."""
     resolved: dict[str, float] = {}
     sizing_method = settings.order_sizing_method.strip().lower()
+    strategy_trade_bounds = strategy_trade_size_bounds(strategy)
+    strategy_signal_cap = strategy_signal_scale(strategy)
+    equity = _resolve_equity(portfolio_snapshot)
     for symbol, signal in sorted(signal_targets.items()):
         signal_value = float(signal)
         target_qty: float
         if sizing_method == "notional":
             if signal_value == 0:
                 target_qty = 0.0
+            elif strategy_trade_bounds is not None and equity is not None:
+                price = latest_prices.get(symbol)
+                if price is None or price <= 0:
+                    target_qty = 0.0
+                else:
+                    min_fraction, max_fraction = strategy_trade_bounds
+                    signal_strength = _signal_strength(
+                        signal_value=signal_value,
+                        signal_cap=strategy_signal_cap,
+                    )
+                    target_fraction = (
+                        min_fraction + ((max_fraction - min_fraction) * signal_strength)
+                    )
+                    target_notional = equity * target_fraction
+                    target_qty = (target_notional / price) * (1 if signal_value > 0 else -1)
             else:
                 price = latest_prices.get(symbol)
                 if price is None or price <= 0:
@@ -963,9 +1010,23 @@ def reconcile_state(
     open_orders = broker.get_open_orders()
     open_client_ids = {order.client_order_id for order in open_orders if order.client_order_id}
     positions = broker.get_positions()
+    get_order_status = getattr(broker, "get_order_status", None)
 
     for intent in active_intents:
-        status = resolve_intent_status(intent, open_client_ids, positions)
+        broker_status: str | None = None
+        if callable(get_order_status) and intent.broker_order_id:
+            try:
+                value = get_order_status(intent.broker_order_id)
+                if isinstance(value, str):
+                    broker_status = value.strip().lower() or None
+            except Exception:
+                broker_status = None
+        status = resolve_intent_status(
+            intent,
+            open_client_ids,
+            positions,
+            broker_status=broker_status,
+        )
         state_store.mark_reconciled(intent.client_order_id, status)
         event_sink.emit(
             TradeEvent(
@@ -993,11 +1054,16 @@ def resolve_intent_status(
     intent: OrderIntentRecord,
     open_client_ids: set[str],
     positions: dict[str, Position],
+    broker_status: str | None = None,
 ) -> str:
     """Determine reconciled status for a persisted intent."""
     epsilon = 1e-6
     if intent.client_order_id in open_client_ids:
         return "submitted"
+    if broker_status in {"filled", "partially_filled"}:
+        return "filled_reconciled"
+    if broker_status in {"canceled", "cancelled", "rejected", "expired"}:
+        return "closed_reconciled"
     position_qty = positions.get(intent.symbol, Position(symbol=intent.symbol, qty=0)).qty
     if intent.side == OrderSide.BUY.value and position_qty + epsilon >= intent.qty:
         return "filled_reconciled"
@@ -1050,6 +1116,54 @@ def strategy_diagnostic_lookback_bars(strategy: Strategy) -> int:
     if isinstance(long_window, (int, float)) and long_window > 0:
         return int(long_window)
     return 1
+
+
+def strategy_trade_size_bounds(strategy: Strategy | None) -> tuple[float, float] | None:
+    """Resolve strategy-level min/max trade size percentages into decimal fractions."""
+    if strategy is None:
+        return None
+    params = getattr(strategy, "params", None)
+    min_pct = getattr(params, "min_trade_size_pct", None)
+    max_pct = getattr(params, "max_trade_size_pct", None)
+    if not isinstance(min_pct, (int, float)) or not isinstance(max_pct, (int, float)):
+        return None
+    min_pct_value = float(min_pct)
+    max_pct_value = float(max_pct)
+    if min_pct_value <= 0 or max_pct_value <= 0:
+        return None
+    if min_pct_value > max_pct_value:
+        return None
+    return (min_pct_value / 100.0, max_pct_value / 100.0)
+
+
+def strategy_signal_scale(strategy: Strategy | None) -> float:
+    """Resolve the signal magnitude that maps to full trade size."""
+    if strategy is None:
+        return 1.0
+    params = getattr(strategy, "params", None)
+    for field in ("max_abs_qty", "target_qty"):
+        value = getattr(params, field, None)
+        if isinstance(value, (int, float)) and float(value) > 0:
+            return float(value)
+    return 1.0
+
+
+def _signal_strength(signal_value: float, signal_cap: float) -> float:
+    """Convert signed signal into a normalized 0..1 strength score."""
+    if abs(signal_value) <= 1e-12:
+        return 0.0
+    if signal_cap <= 0:
+        return 1.0
+    return max(0.0, min(abs(float(signal_value)) / float(signal_cap), 1.0))
+
+
+def _resolve_equity(portfolio_snapshot: PortfolioSnapshot | None) -> float | None:
+    if portfolio_snapshot is None:
+        return None
+    equity = float(portfolio_snapshot.equity)
+    if equity <= 0:
+        return None
+    return equity
 
 
 def strategy_warmup_bars(strategy: Strategy) -> int:

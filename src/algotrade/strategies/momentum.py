@@ -19,6 +19,9 @@ class MomentumParams:
     lookback_bars: int = 10
     threshold: float = 0.01
     max_abs_qty: float = 2.0
+    # Percentage points of equity per position target (0.10 = 0.10%).
+    min_trade_size_pct: float = 0.05
+    max_trade_size_pct: float = 0.10
 
 
 def default_momentum_params() -> MomentumParams:
@@ -38,6 +41,12 @@ class MomentumStrategy(Strategy):
             raise ValueError("max_abs_qty must be positive")
         if params.threshold < 0:
             raise ValueError("threshold must be non-negative")
+        if params.min_trade_size_pct <= 0 or params.max_trade_size_pct <= 0:
+            raise ValueError("trade size percentages must be positive")
+        if params.min_trade_size_pct > params.max_trade_size_pct:
+            raise ValueError("min_trade_size_pct must be <= max_trade_size_pct")
+        if params.max_trade_size_pct > 100:
+            raise ValueError("max_trade_size_pct must be <= 100")
         self.params = params
 
     def decide_targets(
