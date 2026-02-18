@@ -13,7 +13,7 @@ from algotrade.strategies.registry import available_strategy_ids
 def build_parser() -> argparse.ArgumentParser:
     """Build CLI parser."""
     parser = argparse.ArgumentParser(description="Minimal algorithmic trading boilerplate")
-    parser.add_argument("--mode", choices=["backtest", "paper", "live"], help="Runtime mode")
+    parser.add_argument("--mode", choices=["backtest", "live"], help="Runtime mode")
     parser.add_argument("--strategy", type=str, help="Strategy id")
     parser.add_argument("--symbols", type=str, help="Comma-separated symbols")
     parser.add_argument("--once", action="store_true", help="Run one cycle")

@@ -7,6 +7,7 @@ from collections.abc import Callable
 from algotrade.config import Settings
 from algotrade.strategies.base import Strategy
 from algotrade.strategies.momentum import MomentumParams, MomentumStrategy
+from algotrade.strategies.scalping import ScalpingParams, ScalpingStrategy
 from algotrade.strategies.sma_crossover import SmaCrossoverParams, SmaCrossoverStrategy
 
 StrategyFactory = Callable[[Settings], Strategy]
@@ -32,9 +33,22 @@ def _build_momentum(settings: Settings) -> Strategy:
     )
 
 
+def _build_scalping(settings: Settings) -> Strategy:
+    return ScalpingStrategy(
+        params=ScalpingParams(
+            lookback_bars=settings.scalping_lookback_bars,
+            threshold=settings.scalping_threshold,
+            max_abs_qty=settings.scalping_max_abs_qty,
+            flip_seconds=settings.scalping_flip_seconds,
+            allow_short=settings.scalping_allow_short,
+        )
+    )
+
+
 REGISTRY: dict[str, StrategyFactory] = {
     "sma_crossover": _build_sma,
     "momentum": _build_momentum,
+    "scalping": _build_scalping,
 }
 
 

@@ -1,4 +1,4 @@
-"""Alpaca broker adapter for paper and live modes."""
+"""Alpaca broker adapter for live mode (paper or live endpoint)."""
 
 from __future__ import annotations
 

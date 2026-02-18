@@ -61,11 +61,19 @@ def test_backtest_defaults_to_single_cycle_without_flags() -> None:
     assert settings.should_run_continuously() is False
 
 
-def test_paper_defaults_to_continuous_without_flags() -> None:
+def test_live_defaults_to_continuous_without_flags() -> None:
     parser = build_parser()
-    args = parser.parse_args(["--mode", "paper"])
+    args = parser.parse_args(["--mode", "live"])
     settings = apply_cli_overrides(Settings(), args)
 
     assert settings.once is False
     assert settings.continuous is False
     assert settings.should_run_continuously() is True
+
+
+def test_cli_accepts_scalping_strategy() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--mode", "backtest", "--strategy", "scalping"])
+    settings = apply_cli_overrides(Settings(), args)
+
+    assert settings.strategy == "scalping"

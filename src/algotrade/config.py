@@ -13,6 +13,9 @@ except ImportError:
 
 from algotrade.domain.models import Mode
 
+DEFAULT_STOCK_UNIVERSE = ["SPY"]
+DEFAULT_CRYPTO_UNIVERSE = ["BTCUSD"]
+
 
 def parse_bool(value: str | None, default: bool) -> bool:
     """Parse truthy environment strings."""
@@ -30,11 +33,72 @@ def parse_symbols(value: str | None, default: list[str] | None = None) -> list[s
     return symbols or list(fallback)
 
 
+def dedupe_symbols(symbols: list[str]) -> list[str]:
+    """Remove duplicate symbols while preserving order."""
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for symbol in symbols:
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        deduped.append(symbol)
+    return deduped
+
+
+def normalize_asset_universe(value: str | None, default: str = "stocks") -> str:
+    """Normalize asset universe selector values."""
+    mapping = {
+        "stock": "stocks",
+        "stocks": "stocks",
+        "crypto": "crypto",
+        "cryptos": "crypto",
+        "all": "all",
+        "both": "all",
+        "mixed": "all",
+    }
+    normalized_default = mapping.get(default.strip().lower(), "stocks")
+    if value is None:
+        return normalized_default
+    candidate = value.strip().lower()
+    return mapping.get(candidate, normalized_default)
+
+
+def resolve_symbol_universe(
+    explicit_symbols: str | None,
+    universe_selection: str | None,
+    stock_universe: str | None,
+    crypto_universe: str | None,
+) -> list[str]:
+    """Resolve the final tradable symbol list from universe-style env vars."""
+    if explicit_symbols and explicit_symbols.strip():
+        return parse_symbols(explicit_symbols)
+
+    selected_universe = normalize_asset_universe(universe_selection, default="stocks")
+    stock_symbols = parse_symbols(stock_universe, default=DEFAULT_STOCK_UNIVERSE)
+    crypto_symbols = parse_symbols(crypto_universe, default=DEFAULT_CRYPTO_UNIVERSE)
+
+    if selected_universe == "crypto":
+        return crypto_symbols
+    if selected_universe == "all":
+        return dedupe_symbols([*stock_symbols, *crypto_symbols])
+    return stock_symbols
+
+
+def normalize_mode(value: str | None, default: Mode = "live") -> Mode:
+    """Normalize runtime mode while mapping legacy paper mode to live."""
+    candidate = (value or default).strip().lower()
+    if candidate == "paper":
+        return "live"
+    if candidate in {"backtest", "live"}:
+        return candidate
+    return default
+
+
 @dataclass(frozen=True)
 class Settings:
     """Immutable runtime settings."""
 
-    mode: Mode = "paper"
+    mode: Mode = "live"
     strategy: str = "sma_crossover"
     symbols: list[str] = field(default_factory=lambda: ["SPY"])
     once: bool = False
@@ -60,17 +124,28 @@ class Settings:
     momentum_lookback_bars: int = 10
     momentum_threshold: float = 0.01
     momentum_max_abs_qty: int = 2
+    scalping_lookback_bars: int = 2
+    scalping_threshold: float = 0.05
+    scalping_max_abs_qty: int = 1
+    scalping_flip_seconds: int = 1
+    scalping_allow_short: bool = False
 
     @classmethod
     def from_env(cls) -> Self:
         """Create settings from environment variables."""
         if load_dotenv is not None:
             load_dotenv()
-        mode = str(os.getenv("MODE", "paper")).strip().lower()
+        mode = normalize_mode(os.getenv("MODE"), default="live")
+        symbols = resolve_symbol_universe(
+            explicit_symbols=os.getenv("SYMBOLS"),
+            universe_selection=os.getenv("ASSET_UNIVERSE"),
+            stock_universe=os.getenv("STOCK_UNIVERSE"),
+            crypto_universe=os.getenv("CRYPTO_UNIVERSE"),
+        )
         raw = cls(
-            mode=mode if mode in {"backtest", "paper", "live"} else "paper",
+            mode=mode,
             strategy=str(os.getenv("STRATEGY", "sma_crossover")).strip(),
-            symbols=parse_symbols(os.getenv("SYMBOLS")),
+            symbols=symbols,
             once=parse_bool(os.getenv("ONCE"), False),
             continuous=parse_bool(os.getenv("CONTINUOUS"), False),
             interval_seconds=int(os.getenv("INTERVAL_SECONDS", "5")),
@@ -98,12 +173,21 @@ class Settings:
             momentum_lookback_bars=int(os.getenv("MOMENTUM_LOOKBACK_BARS", "10")),
             momentum_threshold=float(os.getenv("MOMENTUM_THRESHOLD", "0.01")),
             momentum_max_abs_qty=int(os.getenv("MOMENTUM_MAX_ABS_QTY", "2")),
+            scalping_lookback_bars=int(os.getenv("SCALPING_LOOKBACK_BARS", "2")),
+            scalping_threshold=float(os.getenv("SCALPING_THRESHOLD", "0.05")),
+            scalping_max_abs_qty=int(os.getenv("SCALPING_MAX_ABS_QTY", "1")),
+            scalping_flip_seconds=int(os.getenv("SCALPING_FLIP_SECONDS", "1")),
+            scalping_allow_short=parse_bool(os.getenv("SCALPING_ALLOW_SHORT"), False),
         )
         return raw.validate()
 
     def with_overrides(self, **kwargs: object) -> Self:
         """Return a new settings object with updated values."""
-        updated = replace(self, **kwargs)
+        overrides = dict(kwargs)
+        mode_override = overrides.get("mode")
+        if isinstance(mode_override, str):
+            overrides["mode"] = normalize_mode(mode_override, default=self.mode)
+        updated = replace(self, **overrides)
         return updated.validate()
 
     def should_run_continuously(self) -> bool:
@@ -112,7 +196,7 @@ class Settings:
             return False
         if self.continuous:
             return True
-        return self.mode in {"paper", "live"}
+        return self.mode == "live"
 
     def effective_data_source(self) -> str:
         """Resolve mode-aware data source defaults."""
@@ -140,8 +224,16 @@ class Settings:
             raise ValueError("momentum_max_abs_qty must be positive")
         if self.momentum_threshold < 0:
             raise ValueError("momentum_threshold must be non-negative")
-        if self.mode not in {"backtest", "paper", "live"}:
-            raise ValueError("mode must be one of backtest, paper, live")
+        if self.scalping_lookback_bars <= 0:
+            raise ValueError("scalping_lookback_bars must be positive")
+        if self.scalping_max_abs_qty <= 0:
+            raise ValueError("scalping_max_abs_qty must be positive")
+        if self.scalping_threshold < 0:
+            raise ValueError("scalping_threshold must be non-negative")
+        if self.scalping_flip_seconds < 0:
+            raise ValueError("scalping_flip_seconds must be non-negative")
+        if self.mode not in {"backtest", "live"}:
+            raise ValueError("mode must be one of backtest, live")
         if self.data_source not in {"auto", "alpaca", "csv"}:
             raise ValueError("data_source must be one of auto, alpaca, csv")
         return self

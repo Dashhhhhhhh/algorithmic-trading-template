@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import replace
 from pathlib import Path
 from time import sleep
@@ -80,7 +81,7 @@ def run(settings: Settings) -> int:
         )
     )
 
-    if settings.mode in {"paper", "live"}:
+    if settings.mode == "live":
         reconcile_state(
             state_store=state_store,
             broker=broker,
@@ -89,6 +90,11 @@ def run(settings: Settings) -> int:
             run_id=run_id,
             settings=settings,
         )
+
+    run_metrics: dict[str, float | None] = {
+        "start_equity": None,
+        "previous_equity": None,
+    }
 
     exit_code = 0
     try:
@@ -103,6 +109,7 @@ def run(settings: Settings) -> int:
                     run_id=run_id,
                     event_sink=event_sink,
                     human_logger=human_logger,
+                    run_metrics=run_metrics,
                 )
                 sleep(float(settings.interval_seconds))
         else:
@@ -115,6 +122,7 @@ def run(settings: Settings) -> int:
                 run_id=run_id,
                 event_sink=event_sink,
                 human_logger=human_logger,
+                run_metrics=run_metrics,
             )
     except KeyboardInterrupt:
         exit_code = 0
@@ -148,13 +156,41 @@ def execute_cycle(
     run_id: str,
     event_sink: JsonlEventSink,
     human_logger: HumanLogger,
+    run_metrics: dict[str, float | None] | None = None,
 ) -> None:
     """Run one decision and submission cycle."""
-    portfolio = broker.get_portfolio()
+    if run_metrics is None:
+        run_metrics = {
+            "start_equity": None,
+            "previous_equity": None,
+        }
+
+    if settings.mode == "live":
+        reconcile_state(
+            state_store=state_store,
+            broker=broker,
+            event_sink=event_sink,
+            human_logger=human_logger,
+            run_id=run_id,
+            settings=settings,
+        )
+
     positions = broker.get_positions()
     bars_by_symbol = build_bars_by_symbol(settings.symbols, data_provider)
+    latest_prices = build_latest_prices(bars_by_symbol)
+    if settings.mode == "backtest" and isinstance(broker, BacktestBroker):
+        broker.update_market_prices(latest_prices)
+    portfolio = broker.get_portfolio()
+    positions = broker.get_positions()
+    pnl_metrics = compute_equity_metrics(run_metrics, float(portfolio.equity))
     targets = strategy.decide_targets(bars_by_symbol, portfolio)
     decision_details: dict[str, dict[str, Any]] = {}
+    include_details = settings.mode == "backtest" or strategy.strategy_id == "scalping"
+    lookback_bars = (
+        settings.scalping_lookback_bars
+        if strategy.strategy_id == "scalping"
+        else settings.momentum_lookback_bars
+    )
 
     for symbol, target in sorted(targets.items()):
         current_qty = positions.get(symbol, Position(symbol=symbol, qty=0)).qty
@@ -163,13 +199,17 @@ def execute_cycle(
             "target_qty": target,
             "current_qty": current_qty,
         }
-        if settings.mode == "backtest":
-            details = summarize_backtest_decision(
+        if include_details:
+            details = summarize_decision_details(
                 bars=bars_by_symbol.get(symbol),
-                lookback_bars=settings.momentum_lookback_bars,
+                lookback_bars=lookback_bars,
                 target_qty=target,
                 current_qty=current_qty,
             )
+            if strategy.strategy_id == "scalping":
+                details["scalping_threshold"] = settings.scalping_threshold
+                details["scalping_flip_seconds"] = settings.scalping_flip_seconds
+                details["scalping_allow_short"] = settings.scalping_allow_short
             decision_details[symbol] = details
             human_logger.decision(symbol, target, current_qty, details=details)
             payload.update(details)
@@ -195,8 +235,34 @@ def execute_cycle(
         allow_short=settings.allow_short,
     )
     orders = apply_risk_gates(raw_orders, portfolio, risk_limits)
+    risk_blocked = find_risk_blocked_orders(raw_orders, orders, portfolio, risk_limits)
 
-    prepared_orders = prepare_orders(
+    for blocked in risk_blocked:
+        blocked_payload = {
+            "symbol": blocked["symbol"],
+            "side": blocked["side"],
+            "qty": blocked["qty"],
+            "current_qty": blocked["current_qty"],
+            "proposed_qty": blocked["proposed_qty"],
+            "reason": blocked["reason"],
+            "status": "risk_blocked",
+        }
+        human_logger.order_update(
+            order_id="risk",
+            status=f"blocked_{blocked['reason']}",
+            client_order_id=f"{blocked['symbol']}:{blocked['side']}:{blocked['qty']}",
+        )
+        event_sink.emit(
+            TradeEvent(
+                run_id=run_id,
+                mode=settings.mode,
+                strategy_id=strategy.strategy_id,
+                event_type="order_update",
+                payload=blocked_payload,
+            )
+        )
+
+    prepared_orders, duplicate_blocked = prepare_orders(
         orders=orders,
         run_id=run_id,
         state_store=state_store,
@@ -204,8 +270,48 @@ def execute_cycle(
         human_logger=human_logger,
         settings=settings,
         strategy=strategy,
+        reference_prices=latest_prices,
     )
-    if settings.mode == "backtest":
+    human_logger.cycle_summary(
+        strategy_id=strategy.strategy_id,
+        raw_orders=len(raw_orders),
+        risk_orders=len(orders),
+        prepared_orders=len(prepared_orders),
+        risk_blocked=len(risk_blocked),
+        duplicate_blocked=len(duplicate_blocked),
+        details=pnl_metrics,
+    )
+
+    pre_submit_payload: dict[str, Any] = {
+        "stage": "pre_submit",
+        "portfolio": serialize_portfolio(portfolio),
+        "pnl": pnl_metrics,
+        "latest_prices": latest_prices,
+        "positions": serialize_positions(positions),
+        "targets": dict(sorted(targets.items())),
+        "raw_orders": serialize_orders(raw_orders),
+        "risk_orders": serialize_orders(orders),
+        "prepared_orders": serialize_orders(prepared_orders),
+        "risk_blocked": risk_blocked,
+        "duplicate_blocked": duplicate_blocked,
+        "raw_order_count": len(raw_orders),
+        "risk_order_count": len(orders),
+        "prepared_order_count": len(prepared_orders),
+    }
+    if decision_details:
+        pre_submit_payload["decisions"] = decision_details
+
+    event_sink.emit(
+        TradeEvent(
+            run_id=run_id,
+            mode=settings.mode,
+            strategy_id=strategy.strategy_id,
+            event_type="cycle_summary",
+            payload=pre_submit_payload,
+        )
+    )
+
+    if not prepared_orders:
         event_sink.emit(
             TradeEvent(
                 run_id=run_id,
@@ -213,35 +319,13 @@ def execute_cycle(
                 strategy_id=strategy.strategy_id,
                 event_type="cycle_summary",
                 payload={
-                    "stage": "pre_submit",
-                    "portfolio": serialize_portfolio(portfolio),
-                    "positions": serialize_positions(positions),
-                    "targets": dict(sorted(targets.items())),
-                    "decisions": decision_details,
-                    "raw_orders": serialize_orders(raw_orders),
-                    "risk_orders": serialize_orders(orders),
-                    "prepared_orders": serialize_orders(prepared_orders),
-                    "duplicate_blocked_count": max(0, len(orders) - len(prepared_orders)),
+                    "stage": "post_submit",
+                    "submitted_order_count": 0,
+                    "positions_after": serialize_positions(broker.get_positions()),
+                    "portfolio_after": serialize_portfolio(broker.get_portfolio()),
                 },
             )
         )
-
-    if not prepared_orders:
-        if settings.mode == "backtest":
-            event_sink.emit(
-                TradeEvent(
-                    run_id=run_id,
-                    mode=settings.mode,
-                    strategy_id=strategy.strategy_id,
-                    event_type="cycle_summary",
-                    payload={
-                        "stage": "post_submit",
-                        "submitted_order_count": 0,
-                        "positions_after": serialize_positions(broker.get_positions()),
-                        "portfolio_after": serialize_portfolio(broker.get_portfolio()),
-                    },
-                )
-            )
         return
 
     receipts = broker.submit_orders(prepared_orders)
@@ -252,39 +336,46 @@ def execute_cycle(
                 broker_order_id=receipt.order_id,
                 status=receipt.status,
             )
-        human_logger.order_update(receipt.order_id, receipt.status, receipt.client_order_id)
+        price_details = extract_receipt_price_details(receipt)
+        human_logger.order_update(
+            receipt.order_id,
+            receipt.status,
+            receipt.client_order_id,
+            details=price_details or None,
+        )
+        payload: dict[str, Any] = {
+            "order_id": receipt.order_id,
+            "client_order_id": receipt.client_order_id,
+            "symbol": receipt.symbol,
+            "side": receipt.side.value,
+            "qty": receipt.qty,
+            "status": receipt.status,
+        }
+        payload.update(price_details)
         event_sink.emit(
             TradeEvent(
                 run_id=run_id,
                 mode=settings.mode,
                 strategy_id=strategy.strategy_id,
                 event_type="order_update",
-                payload={
-                    "order_id": receipt.order_id,
-                    "client_order_id": receipt.client_order_id,
-                    "symbol": receipt.symbol,
-                    "side": receipt.side.value,
-                    "qty": receipt.qty,
-                    "status": receipt.status,
-                },
+                payload=payload,
             )
         )
-    if settings.mode == "backtest":
-        event_sink.emit(
-            TradeEvent(
-                run_id=run_id,
-                mode=settings.mode,
-                strategy_id=strategy.strategy_id,
-                event_type="cycle_summary",
-                payload={
-                    "stage": "post_submit",
-                    "submitted_order_count": len(receipts),
-                    "receipts": serialize_receipts(receipts),
-                    "positions_after": serialize_positions(broker.get_positions()),
-                    "portfolio_after": serialize_portfolio(broker.get_portfolio()),
-                },
-            )
+    event_sink.emit(
+        TradeEvent(
+            run_id=run_id,
+            mode=settings.mode,
+            strategy_id=strategy.strategy_id,
+            event_type="cycle_summary",
+            payload={
+                "stage": "post_submit",
+                "submitted_order_count": len(receipts),
+                "receipts": serialize_receipts(receipts),
+                "positions_after": serialize_positions(broker.get_positions()),
+                "portfolio_after": serialize_portfolio(broker.get_portfolio()),
+            },
         )
+    )
 
 
 def prepare_orders(
@@ -295,60 +386,86 @@ def prepare_orders(
     human_logger: HumanLogger,
     settings: Settings,
     strategy: Strategy,
-) -> list[OrderRequest]:
+    reference_prices: dict[str, float] | None = None,
+) -> tuple[list[OrderRequest], list[dict[str, Any]]]:
     """Attach client ids and persist intent before submission."""
     prepared: list[OrderRequest] = []
+    duplicate_blocked: list[dict[str, Any]] = []
     for index, order in enumerate(orders):
         if state_store.has_active_intent(order.symbol, order.side.value, order.qty):
+            blocked_payload = {
+                "symbol": order.symbol,
+                "side": order.side.value,
+                "qty": order.qty,
+                "status": "duplicate_blocked",
+                "reason": "active_intent",
+            }
+            human_logger.order_update(
+                order_id="dedupe",
+                status="duplicate_blocked",
+                client_order_id=f"{order.symbol}:{order.side.value}:{order.qty}",
+            )
             event_sink.emit(
                 TradeEvent(
                     run_id=run_id,
                     mode=settings.mode,
                     strategy_id=strategy.strategy_id,
                     event_type="order_update",
-                    payload={
-                        "symbol": order.symbol,
-                        "side": order.side.value,
-                        "qty": order.qty,
-                        "status": "duplicate_blocked",
-                    },
+                    payload=blocked_payload,
                 )
             )
+            duplicate_blocked.append(blocked_payload)
             continue
         client_order_id = build_client_order_id(run_id, index, order.symbol)
         order_with_id = replace(order, client_order_id=client_order_id)
         state_store.save_intended_order(run_id, order_with_id)
-        human_logger.order_submit(order.symbol, order.side.value, order.qty, client_order_id)
+        reference_price = None
+        if reference_prices is not None:
+            reference_price = reference_prices.get(order.symbol)
+        submit_details: dict[str, Any] = {}
+        if reference_price is not None:
+            submit_details["reference_price"] = round(reference_price, 6)
+            submit_details["est_notional"] = round(reference_price * order.qty, 4)
+
+        human_logger.order_submit(
+            order.symbol,
+            order.side.value,
+            order.qty,
+            client_order_id,
+            details=submit_details or None,
+        )
+        payload: dict[str, Any] = {
+            "symbol": order_with_id.symbol,
+            "side": order_with_id.side.value,
+            "qty": order_with_id.qty,
+            "client_order_id": order_with_id.client_order_id,
+        }
+        payload.update(submit_details)
         event_sink.emit(
             TradeEvent(
                 run_id=run_id,
                 mode=settings.mode,
                 strategy_id=strategy.strategy_id,
                 event_type="order_submit",
-                payload={
-                    "symbol": order_with_id.symbol,
-                    "side": order_with_id.side.value,
-                    "qty": order_with_id.qty,
-                    "client_order_id": order_with_id.client_order_id,
-                },
+                payload=payload,
             )
         )
         prepared.append(order_with_id)
-    return prepared
+    return prepared, duplicate_blocked
 
 
 def build_client_order_id(run_id: str, index: int, symbol: str) -> str:
-    """Generate stable client order id format."""
-    return f"{run_id[:10]}-{symbol.upper()}-{index}"
+    """Generate unique client order id to satisfy broker uniqueness requirements."""
+    return f"{run_id[:10]}-{symbol.upper()}-{index}-{uuid4().hex[:8]}"
 
 
-def summarize_backtest_decision(
+def summarize_decision_details(
     bars: Any,
     lookback_bars: int,
     target_qty: int,
     current_qty: int,
 ) -> dict[str, Any]:
-    """Build per-symbol diagnostics used in backtest analysis."""
+    """Build per-symbol diagnostics used in cycle analysis."""
     details: dict[str, Any] = {
         "delta_qty": target_qty - current_qty,
     }
@@ -389,6 +506,86 @@ def summarize_backtest_decision(
             details["ret_lb"] = round((latest_close - reference_close) / reference_close, 6)
 
     return details
+
+
+def compute_equity_metrics(
+    run_metrics: dict[str, float | None],
+    equity: float,
+) -> dict[str, float]:
+    """Track equity-based PnL from run start and previous cycle."""
+    start_equity = run_metrics.get("start_equity")
+    previous_equity = run_metrics.get("previous_equity")
+
+    if start_equity is None:
+        start_equity = equity
+        run_metrics["start_equity"] = equity
+    if previous_equity is None:
+        previous_equity = equity
+
+    pnl_start = equity - start_equity
+    pnl_prev = equity - previous_equity
+    pnl_start_pct = (pnl_start / start_equity) if start_equity else 0.0
+
+    run_metrics["previous_equity"] = equity
+    return {
+        "equity": round(equity, 4),
+        "pnl_start": round(pnl_start, 4),
+        "pnl_prev": round(pnl_prev, 4),
+        "pnl_start_pct": round(pnl_start_pct, 6),
+    }
+
+
+def build_latest_prices(bars_by_symbol: dict[str, Any]) -> dict[str, float]:
+    """Build latest close price map for reference pricing diagnostics."""
+    latest_prices: dict[str, float] = {}
+    for symbol, bars in sorted(bars_by_symbol.items()):
+        if not hasattr(bars, "columns"):
+            continue
+        if "close" not in bars.columns:
+            continue
+        if len(bars) == 0:
+            continue
+        latest_prices[symbol] = round(float(bars["close"].iloc[-1]), 6)
+    return latest_prices
+
+
+def extract_receipt_price_details(receipt: Any) -> dict[str, Any]:
+    """Extract price/timestamp metadata from broker receipt payloads."""
+    raw = receipt.raw if isinstance(receipt.raw, dict) else {}
+    filled_avg_price = _parse_optional_float(raw.get("filled_avg_price"))
+    limit_price = _parse_optional_float(raw.get("limit_price"))
+    stop_price = _parse_optional_float(raw.get("stop_price"))
+    details: dict[str, Any] = {}
+
+    if filled_avg_price is not None:
+        details["filled_avg_price"] = round(filled_avg_price, 6)
+        details["filled_notional"] = round(filled_avg_price * receipt.qty, 4)
+    if limit_price is not None:
+        details["limit_price"] = round(limit_price, 6)
+    if stop_price is not None:
+        details["stop_price"] = round(stop_price, 6)
+
+    for field in ("submitted_at", "filled_at", "updated_at"):
+        value = raw.get(field)
+        if isinstance(value, str) and value.strip():
+            details[field] = value
+
+    return details
+
+
+def _parse_optional_float(value: Any) -> float | None:
+    """Parse optional numeric field from mixed broker payload values."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "null"}:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
 
 
 def serialize_positions(positions: dict[str, Position]) -> dict[str, int]:
@@ -435,6 +632,60 @@ def serialize_receipts(receipts: list[Any]) -> list[dict[str, Any]]:
         }
         for receipt in receipts
     ]
+
+
+def find_risk_blocked_orders(
+    raw_orders: list[OrderRequest],
+    safe_orders: list[OrderRequest],
+    portfolio: Any,
+    limits: RiskLimits,
+) -> list[dict[str, Any]]:
+    """Compute which raw orders were removed by risk filters and why."""
+    safe_counts = Counter(_order_signature(order) for order in safe_orders)
+    blocked: list[dict[str, Any]] = []
+
+    for order in raw_orders:
+        signature = _order_signature(order)
+        if safe_counts[signature] > 0:
+            safe_counts[signature] -= 1
+            continue
+
+        current_qty = portfolio.positions.get(
+            order.symbol,
+            Position(symbol=order.symbol, qty=0),
+        ).qty
+        signed_delta = order.qty if order.side is OrderSide.BUY else -order.qty
+        proposed_qty = current_qty + signed_delta
+        if not limits.allow_short and proposed_qty < 0:
+            reason = "short_disabled"
+        elif abs(proposed_qty) > limits.max_abs_position_per_symbol:
+            reason = "max_position_exceeded"
+        else:
+            reason = "filtered"
+
+        blocked.append(
+            {
+                "symbol": order.symbol,
+                "side": order.side.value,
+                "qty": order.qty,
+                "current_qty": current_qty,
+                "proposed_qty": proposed_qty,
+                "reason": reason,
+            }
+        )
+
+    return blocked
+
+
+def _order_signature(order: OrderRequest) -> tuple[str, str, int, str, str]:
+    """Build a deterministic order signature for multiset comparisons."""
+    return (
+        order.symbol,
+        order.side.value,
+        order.qty,
+        order.order_type,
+        order.time_in_force,
+    )
 
 
 def build_bars_by_symbol(symbols: list[str], data_provider: MarketDataProvider) -> dict[str, Any]:
@@ -500,7 +751,7 @@ def resolve_intent_status(
         return "filled_reconciled"
     if intent.side == OrderSide.SELL.value and position_qty <= -intent.qty:
         return "filled_reconciled"
-    return "submitted"
+    return "stale_reconciled"
 
 
 def build_broker(settings: Settings) -> Broker:
@@ -508,7 +759,7 @@ def build_broker(settings: Settings) -> Broker:
     if settings.mode == "backtest":
         return BacktestBroker(starting_cash=settings.backtest_starting_cash)
     if not settings.alpaca_api_key or not settings.alpaca_secret_key:
-        raise ValueError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required for paper/live modes")
+        raise ValueError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required for live mode")
     return AlpacaPaperBroker(
         api_key=settings.alpaca_api_key,
         secret_key=settings.alpaca_secret_key,

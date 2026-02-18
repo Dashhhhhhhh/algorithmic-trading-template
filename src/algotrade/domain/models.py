@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal
 
-Mode = Literal["backtest", "paper", "live"]
+Mode = Literal["backtest", "live"]
 
 
 class OrderSide(StrEnum):

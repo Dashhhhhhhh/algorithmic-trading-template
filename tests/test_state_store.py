@@ -10,7 +10,7 @@ from algotrade.state.sqlite_store import SqliteStateStore
 def test_sqlite_store_persists_run_and_intended_orders(tmp_path: Path) -> None:
     db_path = tmp_path / "state.db"
     store = SqliteStateStore(str(db_path))
-    store.record_run("run-1", "paper", "sma_crossover", ["SPY"])
+    store.record_run("run-1", "live", "sma_crossover", ["SPY"])
     request = OrderRequest(
         symbol="SPY",
         qty=1,
@@ -38,4 +38,4 @@ def test_sqlite_store_persists_run_and_intended_orders(tmp_path: Path) -> None:
     ).fetchone()
     connection.close()
 
-    assert row == ("run-1", "paper", "sma_crossover")
+    assert row == ("run-1", "live", "sma_crossover")

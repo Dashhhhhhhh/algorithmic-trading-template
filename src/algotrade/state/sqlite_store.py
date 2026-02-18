@@ -1,9 +1,9 @@
-"""SQLite state store for restart-safe paper trading."""
+"""SQLite state store for restart-safe live trading."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 from algotrade.domain.models import OrderRequest
@@ -200,7 +200,7 @@ class SqliteStateStore:
 
     @staticmethod
     def _utc_now() -> str:
-        return datetime.now(tz=timezone.utc).isoformat()
+        return datetime.now(tz=UTC).isoformat()
 
     @staticmethod
     def _normalize_submission_status(status: str) -> str:

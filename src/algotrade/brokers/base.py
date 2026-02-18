@@ -9,7 +9,7 @@ from algotrade.domain.models import Order, OrderReceipt, OrderRequest, Portfolio
 
 
 class Broker(Protocol):
-    """Interface for paper/live/backtest brokers."""
+    """Interface for live/backtest brokers."""
 
     def get_portfolio(self) -> PortfolioSnapshot:
         """Return current portfolio snapshot."""
