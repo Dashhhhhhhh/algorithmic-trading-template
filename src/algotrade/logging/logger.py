@@ -28,41 +28,34 @@ class HumanLogger:
         strategy_id: str,
         symbols: list[str],
     ) -> None:
-        self._logger.info(
-            "run_started | %s/%s | symbols=%s | run=%s",
-            mode,
-            strategy_id,
-            ",".join(symbols),
-            self._short_id(run_id),
-        )
+        _ = (run_id, mode, strategy_id, symbols)
+        return None
 
     def decision(
         self,
         symbol: str,
-        target_qty: int,
-        current_qty: int,
+        target_qty: float,
+        current_qty: float,
         details: Mapping[str, Any] | None = None,
     ) -> None:
-        delta = target_qty - current_qty
-        summary = (
-            f"decision | {symbol} | target {target_qty:+d} vs current {current_qty:+d} "
-            f"(delta {delta:+d})"
-        )
-        parts = [summary]
-        if details:
-            parts.extend(self._decision_detail_parts(details))
-        self._logger.info(" | ".join(parts))
+        _ = (symbol, target_qty, current_qty, details)
+        return None
 
     def order_submit(
         self,
         symbol: str,
         side: str,
-        qty: int,
+        qty: float,
         client_order_id: str,
         details: Mapping[str, Any] | None = None,
     ) -> None:
+        normalized_side = side.strip().lower()
+        buy_amount = qty if normalized_side == "buy" else 0.0
+        sell_amount = qty if normalized_side == "sell" else 0.0
         parts = [
-            f"submit | {symbol} {side.upper()} x{qty} | cid {self._short_id(client_order_id)}"
+            f"submit | {symbol} | buy_amount {self._format_qty(buy_amount)} "
+            f"| sell_amount {self._format_qty(sell_amount)} "
+            f"| cid {self._short_id(client_order_id)}"
         ]
         if details:
             reference_price = self._as_float(details.get("reference_price"))
@@ -80,6 +73,10 @@ class HumanLogger:
         client_order_id: str | None = None,
         details: Mapping[str, Any] | None = None,
     ) -> None:
+        if str(order_id).lower() in {"risk", "dedupe", "reconcile", "portfolio"}:
+            return None
+        if str(status).lower() in {"stale_reconciled", "duplicate_blocked"}:
+            return None
         parts = [
             f"update | order {self._short_id(order_id)} | {self._human_status(status)}",
         ]
@@ -111,26 +108,49 @@ class HumanLogger:
         duplicate_blocked: int,
         details: Mapping[str, Any] | None = None,
     ) -> None:
-        parts = [
-            f"cycle | {strategy_id}",
-            f"orders {raw_orders}/{risk_orders}/{prepared_orders}",
-            f"blocked r:{risk_blocked} d:{duplicate_blocked}",
-        ]
-        if details:
-            equity = self._as_float(details.get("equity"))
-            pnl_start = self._as_float(details.get("pnl_start"))
-            pnl_prev = self._as_float(details.get("pnl_prev"))
-            pnl_start_pct = self._as_float(details.get("pnl_start_pct"))
+        _ = (
+            strategy_id,
+            raw_orders,
+            risk_orders,
+            prepared_orders,
+            risk_blocked,
+            duplicate_blocked,
+            details,
+        )
+        return None
 
-            if equity is not None:
-                parts.append(f"equity ${equity:,.2f}")
-            if pnl_start is not None:
-                parts.append(f"run {pnl_start:+,.2f}")
-            if pnl_start_pct is not None:
-                parts.append(f"run% {pnl_start_pct * 100:+.3f}%")
-            if pnl_prev is not None:
-                parts.append(f"cycle {pnl_prev:+,.2f}")
+    def portfolio(self, cash: float, equity: float, buying_power: float) -> None:
+        self._logger.info(
+            "portfolio | cash $%s | equity $%s | buying_power $%s",
+            f"{cash:,.2f}",
+            f"{equity:,.2f}",
+            f"{buying_power:,.2f}",
+        )
 
+    def position(self, symbol: str, qty: float) -> None:
+        self._logger.info("position | %s | qty %s", symbol, self._format_qty(qty, signed=True))
+
+    def cash(self, cash: float) -> None:
+        self._logger.info("cash | $%s", f"{cash:,.2f}")
+
+    def position_exposure(
+        self,
+        symbol: str,
+        qty: float,
+        market_value: float | None = None,
+        cost_basis: float | None = None,
+        unrealized_pl: float | None = None,
+    ) -> None:
+        qty_text = f"{qty:+.8f}".rstrip("0").rstrip(".")
+        if qty_text in {"+", "-"}:
+            qty_text = f"{qty:+.0f}"
+        parts = [f"position | {symbol} | qty {qty_text}"]
+        if market_value is not None:
+            parts.append(f"value ${market_value:,.2f}")
+        if cost_basis is not None:
+            parts.append(f"cost ${cost_basis:,.2f}")
+        if unrealized_pl is not None:
+            parts.append(f"upl {unrealized_pl:+,.2f}")
         self._logger.info(" | ".join(parts))
 
     def error(self, message: str) -> None:
@@ -158,6 +178,17 @@ class HumanLogger:
             return float(text)
         except ValueError:
             return None
+
+    @staticmethod
+    def _format_qty(value: float, signed: bool = False, precision: int = 8) -> str:
+        normalized = 0.0 if abs(float(value)) < 1e-9 else float(value)
+        template = f"{{:{'+' if signed else ''}.{max(0, precision)}f}}"
+        text = template.format(normalized).rstrip("0").rstrip(".")
+        if text in {"", "+", "-"}:
+            return "+0" if signed else "0"
+        if text == "-0":
+            return "+0" if signed else "0"
+        return text
 
     @staticmethod
     def _short_ts(value: str) -> str:
@@ -199,9 +230,5 @@ class HumanLogger:
         ret_lb = self._as_float(details.get("ret_lb"))
         if ret_lb is not None:
             parts.append(f"retLB {ret_lb * 100:+.3f}%")
-
-        volume = self._as_float(details.get("volume"))
-        if volume is not None:
-            parts.append(f"vol {int(volume):,}")
 
         return parts

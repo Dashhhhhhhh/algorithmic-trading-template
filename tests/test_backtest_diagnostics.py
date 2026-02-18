@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from algotrade.config import Settings
 from algotrade.domain.models import (
     OrderReceipt,
     OrderRequest,
@@ -13,6 +14,7 @@ from algotrade.runtime import (
     build_latest_prices,
     compute_equity_metrics,
     extract_receipt_price_details,
+    resolve_target_quantities,
     serialize_orders,
     serialize_portfolio,
     serialize_positions,
@@ -143,3 +145,19 @@ def test_extract_receipt_price_details() -> None:
         "limit_price": 101.2,
         "submitted_at": "2026-02-17T18:00:00Z",
     }
+
+
+def test_resolve_target_quantities_in_notional_mode() -> None:
+    settings = Settings(
+        order_sizing_method="notional",
+        order_notional_usd=100.0,
+        min_trade_qty=0.0001,
+        qty_precision=6,
+    )
+    targets = resolve_target_quantities(
+        signal_targets={"BTCUSD": 1.0, "ETHUSD": -2.0},
+        latest_prices={"BTCUSD": 50000.0, "ETHUSD": 2500.0},
+        settings=settings,
+    )
+
+    assert targets == {"BTCUSD": 0.002, "ETHUSD": -0.08}

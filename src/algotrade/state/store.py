@@ -16,7 +16,7 @@ class OrderIntentRecord:
     run_id: str
     symbol: str
     side: str
-    qty: int
+    qty: float
     status: str
     broker_order_id: str | None
     fingerprint: str
@@ -59,7 +59,7 @@ class StateStore(Protocol):
     def list_active_intents(self) -> list[OrderIntentRecord]:
         """Return unresolved intents."""
 
-    def has_active_intent(self, symbol: str, side: str, qty: int) -> bool:
+    def has_active_intent(self, symbol: str, side: str, qty: float) -> bool:
         """Return true when a matching unresolved intent exists."""
 
     def close(self) -> None:

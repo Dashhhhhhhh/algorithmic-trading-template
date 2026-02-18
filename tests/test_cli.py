@@ -93,3 +93,41 @@ def test_cli_accepts_scalping_strategy() -> None:
     settings = apply_cli_overrides(Settings(), args)
 
     assert settings.strategy == "scalping"
+
+
+def test_cli_accepts_liquidate_flag() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--liquidate"])
+
+    assert args.liquidate is True
+
+
+def test_cli_rejects_liquidate_in_backtest_mode() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--mode", "backtest", "--liquidate"])
+
+    with pytest.raises(ValueError, match="--liquidate requires --mode live"):
+        apply_cli_overrides(Settings(), args)
+
+
+def test_cli_accepts_portfolio_flag() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--portfolio"])
+
+    assert args.portfolio is True
+
+
+def test_cli_rejects_portfolio_in_backtest_mode() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--mode", "backtest", "--portfolio"])
+
+    with pytest.raises(ValueError, match="--portfolio requires --mode live"):
+        apply_cli_overrides(Settings(), args)
+
+
+def test_cli_rejects_multiple_action_flags() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--liquidate", "--portfolio"])
+
+    with pytest.raises(ValueError, match="Use only one action flag"):
+        apply_cli_overrides(Settings(), args)

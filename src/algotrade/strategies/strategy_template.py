@@ -15,7 +15,7 @@ from algotrade.strategies.base import Strategy
 class TemplateParams:
     """Example parameter dataclass for custom strategies."""
 
-    target_qty: int = 1
+    target_qty: float = 1.0
 
 
 class TemplateStrategy(Strategy):
@@ -30,7 +30,7 @@ class TemplateStrategy(Strategy):
         self,
         bars_by_symbol: Mapping[str, pd.DataFrame],
         portfolio_snapshot: PortfolioSnapshot,
-    ) -> dict[str, int]:
+    ) -> dict[str, float]:
         _ = bars_by_symbol
         _ = portfolio_snapshot
         return {}

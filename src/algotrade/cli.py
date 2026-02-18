@@ -6,8 +6,8 @@ import argparse
 import sys
 
 from algotrade.config import Settings, parse_symbols
-from algotrade.runtime import run
-from algotrade.strategies.registry import available_strategy_ids
+from algotrade.runtime import liquidate, run, show_portfolio
+from algotrade.strategies.registry import available_strategy_ids, default_strategy_id
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,6 +24,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state-db", type=str, help="SQLite state database path")
     parser.add_argument("--events-dir", type=str, help="Run outputs directory")
     parser.add_argument("--data-source", choices=["alpaca", "csv", "auto"], help="Data source")
+    parser.add_argument(
+        "--liquidate",
+        action="store_true",
+        help="Submit offsetting market orders to flatten all live positions, then exit",
+    )
+    parser.add_argument(
+        "--portfolio",
+        action="store_true",
+        help="List current live portfolio balances and positions, then exit",
+    )
     return parser
 
 
@@ -50,6 +60,14 @@ def apply_cli_overrides(settings: Settings, args: argparse.Namespace) -> Setting
         overrides["data_source"] = args.data_source
 
     merged = settings.with_overrides(**overrides)
+    if not merged.strategy.strip():
+        merged = merged.with_overrides(strategy=default_strategy_id())
+    if args.liquidate and args.portfolio:
+        raise ValueError("Use only one action flag: --liquidate or --portfolio")
+    if args.liquidate and merged.mode != "live":
+        raise ValueError("--liquidate requires --mode live")
+    if args.portfolio and merged.mode != "live":
+        raise ValueError("--portfolio requires --mode live")
     if merged.strategy not in available_strategy_ids():
         supported = ", ".join(available_strategy_ids())
         raise ValueError(f"Unknown strategy '{merged.strategy}'. Supported: {supported}")
@@ -65,6 +83,10 @@ def main() -> int:
     except ValueError as exc:
         print(f"Configuration error: {exc}")
         return 2
+    if args.liquidate:
+        return liquidate(settings)
+    if args.portfolio:
+        return show_portfolio(settings)
     return run(settings)
 
 

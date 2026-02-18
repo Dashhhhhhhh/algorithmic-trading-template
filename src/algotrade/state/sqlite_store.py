@@ -126,7 +126,7 @@ class SqliteStateStore:
                     run_id=str(row["run_id"]),
                     symbol=str(row["symbol"]),
                     side=str(row["side"]),
-                    qty=int(row["qty"]),
+                    qty=float(row["qty"]),
                     status=str(row["status"]),
                     broker_order_id=str(row["broker_order_id"]) if row["broker_order_id"] else None,
                     fingerprint=str(row["fingerprint"]),
@@ -134,7 +134,7 @@ class SqliteStateStore:
             )
         return records
 
-    def has_active_intent(self, symbol: str, side: str, qty: int) -> bool:
+    def has_active_intent(self, symbol: str, side: str, qty: float) -> bool:
         fingerprint = self._fingerprint(symbol, side, qty)
         row = self.connection.execute(
             """
@@ -170,7 +170,7 @@ class SqliteStateStore:
                 run_id TEXT NOT NULL,
                 symbol TEXT NOT NULL,
                 side TEXT NOT NULL,
-                qty INTEGER NOT NULL,
+                qty REAL NOT NULL,
                 order_type TEXT NOT NULL,
                 status TEXT NOT NULL,
                 broker_order_id TEXT,
@@ -195,8 +195,16 @@ class SqliteStateStore:
         self.connection.commit()
 
     @staticmethod
-    def _fingerprint(symbol: str, side: str, qty: int) -> str:
-        return f"{symbol.upper()}|{side.lower()}|{int(qty)}"
+    def _fingerprint(symbol: str, side: str, qty: float) -> str:
+        return f"{symbol.upper()}|{side.lower()}|{SqliteStateStore._format_qty(qty)}"
+
+    @staticmethod
+    def _format_qty(qty: float, precision: int = 8) -> str:
+        normalized = 0.0 if abs(float(qty)) < 1e-9 else float(qty)
+        text = f"{normalized:.{max(0, precision)}f}".rstrip("0").rstrip(".")
+        if not text or text == "-0":
+            return "0"
+        return text
 
     @staticmethod
     def _utc_now() -> str:

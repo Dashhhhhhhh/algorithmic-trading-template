@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pandas as pd
 
 from algotrade.domain.models import PortfolioSnapshot
@@ -44,13 +42,11 @@ def test_scalping_returns_signal_based_target_when_move_exceeds_threshold() -> N
             lookback_bars=2,
             threshold=0.0005,
             max_abs_qty=2,
-            flip_seconds=1,
             allow_short=True,
-        ),
-        now_provider=lambda: datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC),
+        )
     )
-    bullish = pd.DataFrame({"close": [100.0, 100.01, 100.12]})
-    bearish = pd.DataFrame({"close": [100.12, 100.01, 100.0]})
+    bullish = pd.DataFrame({"close": [100.0, 100.2, 100.4, 100.7, 100.9, 101.2, 101.4, 101.7]})
+    bearish = pd.DataFrame({"close": [101.7, 101.4, 101.2, 100.9, 100.7, 100.4, 100.2, 100.0]})
 
     bullish_targets = strategy.decide_targets({"SPY": bullish}, _snapshot())
     bearish_targets = strategy.decide_targets({"SPY": bearish}, _snapshot())
@@ -59,31 +55,17 @@ def test_scalping_returns_signal_based_target_when_move_exceeds_threshold() -> N
     assert bearish_targets == {"SPY": -2}
 
 
-def test_scalping_flips_direction_when_signal_is_flat() -> None:
-    bars = pd.DataFrame({"close": [100.0, 100.0, 100.0]})
-    bullish_flip = ScalpingStrategy(
+def test_scalping_returns_flat_when_signal_is_weak() -> None:
+    bars = pd.DataFrame({"close": [100.0, 100.02, 100.01, 100.03, 100.02, 100.03, 100.02, 100.03]})
+    strategy = ScalpingStrategy(
         ScalpingParams(
             lookback_bars=2,
-            threshold=0.05,
+            threshold=0.002,
             max_abs_qty=1,
-            flip_seconds=1,
             allow_short=False,
-        ),
-        now_provider=lambda: datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC),
-    )
-    bearish_flip = ScalpingStrategy(
-        ScalpingParams(
-            lookback_bars=2,
-            threshold=0.05,
-            max_abs_qty=1,
-            flip_seconds=1,
-            allow_short=False,
-        ),
-        now_provider=lambda: datetime(2026, 1, 1, 0, 0, 3, tzinfo=UTC),
+        )
     )
 
-    bullish_targets = bullish_flip.decide_targets({"SPY": bars}, _snapshot())
-    bearish_targets = bearish_flip.decide_targets({"SPY": bars}, _snapshot())
+    targets = strategy.decide_targets({"SPY": bars}, _snapshot())
 
-    assert bullish_targets == {"SPY": 1}
-    assert bearish_targets == {"SPY": 0}
+    assert targets == {"SPY": 0}

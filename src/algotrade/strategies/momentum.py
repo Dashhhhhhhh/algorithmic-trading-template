@@ -18,7 +18,12 @@ class MomentumParams:
 
     lookback_bars: int = 10
     threshold: float = 0.01
-    max_abs_qty: int = 2
+    max_abs_qty: float = 2.0
+
+
+def default_momentum_params() -> MomentumParams:
+    """Default momentum strategy configuration kept local to this module."""
+    return MomentumParams()
 
 
 class MomentumStrategy(Strategy):
@@ -39,14 +44,14 @@ class MomentumStrategy(Strategy):
         self,
         bars_by_symbol: Mapping[str, pd.DataFrame],
         portfolio_snapshot: PortfolioSnapshot,
-    ) -> dict[str, int]:
+    ) -> dict[str, float]:
         _ = portfolio_snapshot
-        targets: dict[str, int] = {}
+        targets: dict[str, float] = {}
         for symbol, bars in sorted(bars_by_symbol.items()):
             targets[symbol] = self._target_for_symbol(bars)
         return targets
 
-    def _target_for_symbol(self, bars: pd.DataFrame) -> int:
+    def _target_for_symbol(self, bars: pd.DataFrame) -> float:
         if "close" not in bars.columns:
             raise ValueError("bars must include close column")
         if len(bars) <= self.params.lookback_bars:

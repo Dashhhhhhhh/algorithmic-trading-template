@@ -64,11 +64,32 @@ class AlpacaPaperBroker:
         for item in payload if isinstance(payload, list) else []:
             symbol = str(item.get("symbol", "")).upper()
             side = str(item.get("side", "long")).lower()
-            raw_qty = abs(float(item.get("qty", 0)))
-            qty = int(round(raw_qty))
-            signed_qty = -qty if side == "short" else qty
+            raw_qty = abs(self._parse_optional_float(item.get("qty")) or 0.0)
+            signed_qty = -raw_qty if side == "short" else raw_qty
             positions[symbol] = Position(symbol=symbol, qty=signed_qty)
         return positions
+
+    def get_positions_details(self) -> list[dict[str, Any]]:
+        """Return position-level quantity and cash-value diagnostics."""
+        payload = self._request("GET", "/v2/positions")
+        details: list[dict[str, Any]] = []
+        for item in payload if isinstance(payload, list) else []:
+            symbol = str(item.get("symbol", "")).upper()
+            side = str(item.get("side", "long")).lower()
+            raw_qty = self._parse_optional_float(item.get("qty"))
+            qty = raw_qty if raw_qty is not None else None
+            if qty is not None and side == "short":
+                qty = -abs(qty)
+            details.append(
+                {
+                    "symbol": symbol,
+                    "qty": qty,
+                    "market_value": self._parse_optional_float(item.get("market_value")),
+                    "cost_basis": self._parse_optional_float(item.get("cost_basis")),
+                    "unrealized_pl": self._parse_optional_float(item.get("unrealized_pl")),
+                }
+            )
+        return details
 
     def get_open_orders(self) -> list[Order]:
         payload = self._request(
@@ -84,7 +105,7 @@ class AlpacaPaperBroker:
                     order_id=str(item.get("id", "")),
                     symbol=str(item.get("symbol", "")).upper(),
                     side=side,
-                    qty=int(round(float(item.get("qty", 0)))),
+                    qty=self._parse_optional_float(item.get("qty")) or 0.0,
                     status=str(item.get("status", "")),
                     client_order_id=str(item.get("client_order_id", "")) or None,
                 )
@@ -108,7 +129,7 @@ class AlpacaPaperBroker:
                 order_id=str(payload.get("id", "")),
                 symbol=str(payload.get("symbol", request.symbol)).upper(),
                 side=self._to_order_side(str(payload.get("side", request.side.value))),
-                qty=int(round(float(payload.get("qty", request.qty)))),
+                qty=float(payload.get("qty", request.qty)),
                 status=str(payload.get("status", "submitted")),
                 client_order_id=(
                     str(payload.get("client_order_id", request.client_order_id or ""))
@@ -118,6 +139,16 @@ class AlpacaPaperBroker:
             )
             receipts.append(receipt)
         return receipts
+
+    def close_all_positions(self, cancel_orders: bool = True) -> list[dict[str, Any]]:
+        """Close every open position using Alpaca's server-side liquidation endpoint."""
+        params = {"cancel_orders": "true"} if cancel_orders else None
+        payload = self._request("DELETE", "/v2/positions", params=params)
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if isinstance(payload, dict):
+            return [payload]
+        return []
 
     def subscribe_trade_updates(self, handler: Callable[[Order], None]) -> None:
         _ = handler
@@ -235,3 +266,17 @@ class AlpacaPaperBroker:
                 pass
 
         return max(float(attempt), 1.0)
+
+    @staticmethod
+    def _parse_optional_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        text = str(value).strip()
+        if not text or text.lower() in {"none", "null"}:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None

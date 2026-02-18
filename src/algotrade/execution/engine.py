@@ -8,20 +8,25 @@ from algotrade.execution.risk import filter_orders_by_limits
 
 def compute_orders(
     current_positions: dict[str, Position],
-    targets: dict[str, int],
+    targets: dict[str, float],
     default_order_type: str,
+    min_trade_qty: float = 0.0001,
+    qty_precision: int = 6,
 ) -> list[OrderRequest]:
     """Translate current and target positions into delta orders."""
     orders: list[OrderRequest] = []
+    normalized_min_trade_qty = max(float(min_trade_qty), 1e-9)
+    precision = max(0, int(qty_precision))
     for symbol, target_qty in sorted(targets.items()):
-        current_qty = current_positions.get(symbol, Position(symbol=symbol, qty=0)).qty
-        delta = int(target_qty) - int(current_qty)
-        if delta == 0:
+        current_qty = float(current_positions.get(symbol, Position(symbol=symbol, qty=0)).qty)
+        delta = float(target_qty) - current_qty
+        qty = round(abs(delta), precision)
+        if qty < normalized_min_trade_qty:
             continue
         side = OrderSide.BUY if delta > 0 else OrderSide.SELL
         request = OrderRequest(
             symbol=symbol,
-            qty=abs(delta),
+            qty=qty,
             side=side,
             order_type=default_order_type,
         )

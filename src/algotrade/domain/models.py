@@ -21,7 +21,7 @@ class Position:
     """Current signed position for a symbol."""
 
     symbol: str
-    qty: int
+    qty: float
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,7 @@ class Order:
     order_id: str
     symbol: str
     side: OrderSide
-    qty: int
+    qty: float
     status: str
     client_order_id: str | None = None
 
@@ -51,7 +51,7 @@ class OrderRequest:
     """Order intent produced by the execution engine."""
 
     symbol: str
-    qty: int
+    qty: float
     side: OrderSide
     order_type: str = "market"
     time_in_force: str = "day"
@@ -65,7 +65,7 @@ class OrderReceipt:
     order_id: str
     symbol: str
     side: OrderSide
-    qty: int
+    qty: float
     status: str
     client_order_id: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
@@ -75,5 +75,5 @@ class OrderReceipt:
 class RiskLimits:
     """Portfolio-level risk constraints."""
 
-    max_abs_position_per_symbol: int = 100
+    max_abs_position_per_symbol: float = 100.0
     allow_short: bool = True

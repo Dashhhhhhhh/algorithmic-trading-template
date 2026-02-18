@@ -10,10 +10,10 @@ def clamp_int(value: int, low: int, high: int) -> int:
 
 def momentum_to_target(
     momentum_score: float,
-    max_abs_qty: int,
+    max_abs_qty: float,
     threshold: float,
-) -> int:
-    """Map momentum score to a bounded integer target position."""
+) -> float:
+    """Map momentum score to a bounded target position size."""
     if momentum_score >= threshold:
         return max_abs_qty
     if momentum_score <= -threshold:

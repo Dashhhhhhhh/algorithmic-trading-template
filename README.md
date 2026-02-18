@@ -77,6 +77,21 @@ uv run algotrade --mode live --strategy momentum --symbols SPY
 uv run algotrade --mode live --strategy momentum --symbols SPY --cycles 3
 ```
 
+### Liquidate (flatten all live positions and exit)
+
+```bash
+uv run algotrade --liquidate
+```
+
+### Portfolio (list current balances and positions)
+
+```bash
+uv run algotrade --portfolio
+```
+
+In live mode, portfolio output includes per-position quantity and, when available from Alpaca,
+cash value/cost details (market value, cost basis, unrealized P/L).
+
 ## Configuration
 
 Settings load from `.env` and can be overridden by CLI flags.
@@ -106,6 +121,20 @@ INTERVAL_SECONDS=5
 
 In finite mode (`--cycles N`), interval applies between cycles. In continuous live mode, it applies indefinitely.
 
+### Position Sizing
+
+By default, live/backtest order quantities are computed using notional sizing so the system can trade
+fractional stock/crypto quantities instead of requiring whole units.
+
+```bash
+ORDER_SIZING_METHOD=notional   # notional | units
+ORDER_NOTIONAL_USD=100         # dollar exposure per +1/-1 target unit
+MIN_TRADE_QTY=0.0001           # skip tiny deltas below this quantity
+QTY_PRECISION=6                # quantity rounding precision
+```
+
+Use `ORDER_SIZING_METHOD=units` to keep legacy whole-unit target behavior.
+
 ## CLI Reference
 
 ```bash
@@ -123,14 +152,19 @@ Supported options:
 - `--state-db <path>`
 - `--events-dir <path>`
 - `--data-source {alpaca,csv,auto}`
+- `--liquidate`
+- `--portfolio`
 
 ## Strategies
 
 - `sma_crossover`
 - `momentum`
-- `scalping`
+- `scalping` (EMA trend + short-horizon momentum confirmation)
 
-Strategy parameters are configured in `.env` (see `.env.example`).
+Strategy-specific parameters live in each strategy module under
+`/Users/dashdunmire/Documents/algotrade/boilerplate/src/algotrade/strategies/`.
+Edit the module-level default helpers there:
+`default_sma_crossover_params()`, `default_momentum_params()`, `default_scalping_params()`.
 
 ## Output
 

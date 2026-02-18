@@ -29,5 +29,5 @@ class Strategy(ABC):
         self,
         bars_by_symbol: Mapping[str, pd.DataFrame],
         portfolio_snapshot: PortfolioSnapshot,
-    ) -> dict[str, int]:
+    ) -> dict[str, float]:
         """Return target quantities by symbol."""

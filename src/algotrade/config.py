@@ -112,7 +112,7 @@ class Settings:
     """Immutable runtime settings."""
 
     mode: Mode = "live"
-    strategy: str = "sma_crossover"
+    strategy: str = ""
     symbols: list[str] = field(default_factory=lambda: ["SPY"])
     cycles: int | None = None
     interval_seconds: int = 5
@@ -122,25 +122,18 @@ class Settings:
     state_db_path: str = "state/algotrade_state.db"
     log_level: str = "INFO"
     default_order_type: str = "market"
-    order_qty: int = 1
+    order_sizing_method: str = "notional"
+    order_notional_usd: float = 100.0
+    min_trade_qty: float = 0.0001
+    qty_precision: int = 6
     allow_short: bool = True
-    max_abs_position_per_symbol: int = 100
+    max_abs_position_per_symbol: float = 100.0
     alpaca_api_key: str = ""
     alpaca_secret_key: str = ""
     alpaca_base_url: str = "https://paper-api.alpaca.markets"
     alpaca_data_url: str = "https://data.alpaca.markets"
     timeframe: str = "1Day"
     backtest_starting_cash: float = 100000.0
-    sma_short_window: int = 20
-    sma_long_window: int = 50
-    momentum_lookback_bars: int = 10
-    momentum_threshold: float = 0.01
-    momentum_max_abs_qty: int = 2
-    scalping_lookback_bars: int = 2
-    scalping_threshold: float = 0.05
-    scalping_max_abs_qty: int = 1
-    scalping_flip_seconds: int = 1
-    scalping_allow_short: bool = False
 
     @classmethod
     def from_env(cls) -> Self:
@@ -148,6 +141,7 @@ class Settings:
         if load_dotenv is not None:
             load_dotenv()
         mode = normalize_mode(os.getenv("MODE"), default="live")
+        strategy = str(os.getenv("STRATEGY", "")).strip()
         symbols = resolve_symbol_universe(
             explicit_symbols=os.getenv("SYMBOLS"),
             universe_selection=os.getenv("ASSET_UNIVERSE"),
@@ -156,7 +150,7 @@ class Settings:
         )
         raw = cls(
             mode=mode,
-            strategy=str(os.getenv("STRATEGY", "sma_crossover")).strip(),
+            strategy=strategy,
             symbols=symbols,
             cycles=parse_optional_positive_int(os.getenv("CYCLES")),
             interval_seconds=int(
@@ -168,9 +162,16 @@ class Settings:
             state_db_path=str(os.getenv("STATE_DB_PATH", "state/algotrade_state.db")).strip(),
             log_level=str(os.getenv("LOG_LEVEL", "INFO")).strip().upper(),
             default_order_type=str(os.getenv("DEFAULT_ORDER_TYPE", "market")).strip(),
-            order_qty=int(os.getenv("ORDER_QTY", "1")),
+            order_sizing_method=str(
+                os.getenv("ORDER_SIZING_METHOD", "notional")
+            ).strip().lower(),
+            order_notional_usd=float(os.getenv("ORDER_NOTIONAL_USD", "100")),
+            min_trade_qty=float(os.getenv("MIN_TRADE_QTY", "0.0001")),
+            qty_precision=int(os.getenv("QTY_PRECISION", "6")),
             allow_short=parse_bool(os.getenv("ALLOW_SHORT"), True),
-            max_abs_position_per_symbol=int(os.getenv("MAX_ABS_POSITION_PER_SYMBOL", "100")),
+            max_abs_position_per_symbol=float(
+                os.getenv("MAX_ABS_POSITION_PER_SYMBOL", "100")
+            ),
             alpaca_api_key=str(os.getenv("ALPACA_API_KEY", "")).strip(),
             alpaca_secret_key=str(os.getenv("ALPACA_SECRET_KEY", "")).strip(),
             alpaca_base_url=str(
@@ -181,16 +182,6 @@ class Settings:
             ).strip(),
             timeframe=str(os.getenv("TIMEFRAME", "1Day")).strip(),
             backtest_starting_cash=float(os.getenv("BACKTEST_STARTING_CASH", "100000")),
-            sma_short_window=int(os.getenv("SMA_SHORT_WINDOW", "20")),
-            sma_long_window=int(os.getenv("SMA_LONG_WINDOW", "50")),
-            momentum_lookback_bars=int(os.getenv("MOMENTUM_LOOKBACK_BARS", "10")),
-            momentum_threshold=float(os.getenv("MOMENTUM_THRESHOLD", "0.01")),
-            momentum_max_abs_qty=int(os.getenv("MOMENTUM_MAX_ABS_QTY", "2")),
-            scalping_lookback_bars=int(os.getenv("SCALPING_LOOKBACK_BARS", "2")),
-            scalping_threshold=float(os.getenv("SCALPING_THRESHOLD", "0.05")),
-            scalping_max_abs_qty=int(os.getenv("SCALPING_MAX_ABS_QTY", "1")),
-            scalping_flip_seconds=int(os.getenv("SCALPING_FLIP_SECONDS", "1")),
-            scalping_allow_short=parse_bool(os.getenv("SCALPING_ALLOW_SHORT"), False),
         )
         return raw.validate()
 
@@ -225,28 +216,16 @@ class Settings:
             raise ValueError("interval_seconds must be positive")
         if self.cycles is not None and self.cycles <= 0:
             raise ValueError("cycles must be positive")
-        if self.order_qty <= 0:
-            raise ValueError("order_qty must be positive")
+        if self.order_sizing_method not in {"units", "notional"}:
+            raise ValueError("order_sizing_method must be one of units, notional")
+        if self.order_notional_usd <= 0:
+            raise ValueError("order_notional_usd must be positive")
+        if self.min_trade_qty <= 0:
+            raise ValueError("min_trade_qty must be positive")
+        if self.qty_precision < 0 or self.qty_precision > 12:
+            raise ValueError("qty_precision must be between 0 and 12")
         if self.max_abs_position_per_symbol <= 0:
             raise ValueError("max_abs_position_per_symbol must be positive")
-        if self.sma_short_window <= 0 or self.sma_long_window <= 0:
-            raise ValueError("SMA windows must be positive")
-        if self.sma_short_window >= self.sma_long_window:
-            raise ValueError("sma_short_window must be less than sma_long_window")
-        if self.momentum_lookback_bars <= 0:
-            raise ValueError("momentum_lookback_bars must be positive")
-        if self.momentum_max_abs_qty <= 0:
-            raise ValueError("momentum_max_abs_qty must be positive")
-        if self.momentum_threshold < 0:
-            raise ValueError("momentum_threshold must be non-negative")
-        if self.scalping_lookback_bars <= 0:
-            raise ValueError("scalping_lookback_bars must be positive")
-        if self.scalping_max_abs_qty <= 0:
-            raise ValueError("scalping_max_abs_qty must be positive")
-        if self.scalping_threshold < 0:
-            raise ValueError("scalping_threshold must be non-negative")
-        if self.scalping_flip_seconds < 0:
-            raise ValueError("scalping_flip_seconds must be non-negative")
         if self.mode not in {"backtest", "live"}:
             raise ValueError("mode must be one of backtest, live")
         if self.data_source not in {"auto", "alpaca", "csv"}:

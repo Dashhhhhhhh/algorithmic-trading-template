@@ -17,7 +17,12 @@ class SmaCrossoverParams:
 
     short_window: int = 20
     long_window: int = 50
-    target_qty: int = 1
+    target_qty: float = 1.0
+
+
+def default_sma_crossover_params() -> SmaCrossoverParams:
+    """Default SMA strategy configuration kept local to this module."""
+    return SmaCrossoverParams()
 
 
 class SmaCrossoverStrategy(Strategy):
@@ -38,14 +43,14 @@ class SmaCrossoverStrategy(Strategy):
         self,
         bars_by_symbol: Mapping[str, pd.DataFrame],
         portfolio_snapshot: PortfolioSnapshot,
-    ) -> dict[str, int]:
+    ) -> dict[str, float]:
         _ = portfolio_snapshot
-        targets: dict[str, int] = {}
+        targets: dict[str, float] = {}
         for symbol, bars in sorted(bars_by_symbol.items()):
             targets[symbol] = self._target_for_symbol(bars)
         return targets
 
-    def _target_for_symbol(self, bars: pd.DataFrame) -> int:
+    def _target_for_symbol(self, bars: pd.DataFrame) -> float:
         if "close" not in bars.columns:
             raise ValueError("bars must include close column")
         min_rows = self.params.long_window + 1

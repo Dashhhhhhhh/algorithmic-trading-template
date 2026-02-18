@@ -45,7 +45,7 @@ class NoopStateStore:
     def list_active_intents(self) -> list[OrderIntentRecord]:
         return []
 
-    def has_active_intent(self, symbol: str, side: str, qty: int) -> bool:
+    def has_active_intent(self, symbol: str, side: str, qty: float) -> bool:
         _ = (symbol, side, qty)
         return False
 
@@ -53,10 +53,185 @@ class NoopStateStore:
         return None
 
 
+def show_portfolio(settings: Settings) -> int:
+    """List current portfolio balances and positions."""
+    if settings.mode != "live":
+        raise ValueError("--portfolio requires --mode live")
+
+    broker = build_broker(settings)
+    human_logger = HumanLogger(level=settings.log_level)
+    run_id = uuid4().hex
+
+    try:
+        positions = broker.get_positions()
+        portfolio = broker.get_portfolio()
+        human_logger.run_started(
+            run_id=run_id,
+            mode=settings.mode,
+            strategy_id="portfolio",
+            symbols=sorted(positions),
+        )
+        human_logger.portfolio(
+            cash=float(portfolio.cash),
+            equity=float(portfolio.equity),
+            buying_power=float(portfolio.buying_power),
+        )
+        human_logger.cash(float(portfolio.cash))
+        if not positions:
+            human_logger.order_update(order_id="portfolio", status="no_positions")
+            return 0
+        get_positions_details = getattr(broker, "get_positions_details", None)
+        if callable(get_positions_details):
+            detailed_positions = get_positions_details()
+            if detailed_positions:
+                detailed_symbols: set[str] = set()
+                for item in sorted(
+                    (entry for entry in detailed_positions if isinstance(entry, dict)),
+                    key=lambda entry: str(entry.get("symbol", "")),
+                ):
+                    symbol = str(item.get("symbol", "")).upper()
+                    if not symbol:
+                        continue
+                    detailed_symbols.add(symbol)
+                    qty = _parse_optional_float(item.get("qty"))
+                    market_value = _parse_optional_float(item.get("market_value"))
+                    cost_basis = _parse_optional_float(item.get("cost_basis"))
+                    unrealized_pl = _parse_optional_float(item.get("unrealized_pl"))
+                    if qty is not None:
+                        human_logger.position_exposure(
+                            symbol=symbol,
+                            qty=qty,
+                            market_value=market_value,
+                            cost_basis=cost_basis,
+                            unrealized_pl=unrealized_pl,
+                        )
+                        continue
+                    fallback_qty = positions.get(symbol)
+                    if fallback_qty is not None:
+                        human_logger.position(symbol=symbol, qty=fallback_qty.qty)
+                        continue
+                    human_logger.position(symbol=symbol, qty=0)
+                for symbol, position in sorted(positions.items()):
+                    if symbol in detailed_symbols:
+                        continue
+                    human_logger.position(symbol=symbol, qty=position.qty)
+                return 0
+        for symbol, position in sorted(positions.items()):
+            human_logger.position(symbol=symbol, qty=position.qty)
+    except Exception as exc:
+        human_logger.error(str(exc))
+        return 1
+
+    return 0
+
+
+def liquidate(settings: Settings) -> int:
+    """Close all open positions by submitting offsetting orders."""
+    if settings.mode != "live":
+        raise ValueError("--liquidate requires --mode live")
+
+    broker = build_broker(settings)
+    human_logger = HumanLogger(level=settings.log_level)
+    run_id = uuid4().hex
+
+    try:
+        positions = broker.get_positions()
+        human_logger.run_started(
+            run_id=run_id,
+            mode=settings.mode,
+            strategy_id="liquidate",
+            symbols=sorted(positions),
+        )
+        if not positions:
+            human_logger.order_update(
+                order_id="liquidate",
+                status="no_positions",
+            )
+            portfolio = broker.get_portfolio()
+            human_logger.portfolio(
+                cash=float(portfolio.cash),
+                equity=float(portfolio.equity),
+                buying_power=float(portfolio.buying_power),
+            )
+            return 0
+
+        # Prefer Alpaca's server-side close endpoint so fractional crypto positions are closed
+        # exactly and reserved balances/open orders are handled in a single call.
+        close_all_positions = getattr(broker, "close_all_positions", None)
+        if callable(close_all_positions):
+            raw_updates = close_all_positions(cancel_orders=True)
+            for update in raw_updates:
+                symbol = str(update.get("symbol", ""))
+                qty = _parse_optional_float(update.get("qty"))
+                side = str(update.get("side", ""))
+                if symbol and qty is not None and side:
+                    qty_display = abs(float(qty))
+                    if qty_display <= 0:
+                        qty_display = 0.0001
+                    human_logger.order_submit(
+                        symbol=symbol,
+                        side=side,
+                        qty=qty_display,
+                        client_order_id="liquidate",
+                    )
+                human_logger.order_update(
+                    order_id=str(update.get("id", "liquidate")),
+                    status=str(update.get("status", "submitted")),
+                    client_order_id=(
+                        str(update.get("client_order_id", "")) or None
+                    ),
+                    details={
+                        key: update[key]
+                        for key in ("filled_avg_price", "submitted_at", "filled_at", "updated_at")
+                        if key in update
+                    }
+                    or None,
+                )
+            portfolio = broker.get_portfolio()
+            human_logger.portfolio(
+                cash=float(portfolio.cash),
+                equity=float(portfolio.equity),
+                buying_power=float(portfolio.buying_power),
+            )
+            return 0
+
+        orders = build_liquidation_orders(
+            positions=positions,
+            default_order_type=settings.default_order_type,
+        )
+        for order in orders:
+            human_logger.order_submit(
+                symbol=order.symbol,
+                side=order.side.value,
+                qty=order.qty,
+                client_order_id="liquidate",
+            )
+        receipts = broker.submit_orders(orders)
+        for receipt in receipts:
+            details = extract_receipt_price_details(receipt)
+            human_logger.order_update(
+                order_id=receipt.order_id,
+                status=receipt.status,
+                client_order_id=receipt.client_order_id,
+                details=details or None,
+            )
+        portfolio = broker.get_portfolio()
+        human_logger.portfolio(
+            cash=float(portfolio.cash),
+            equity=float(portfolio.equity),
+            buying_power=float(portfolio.buying_power),
+        )
+    except Exception as exc:
+        human_logger.error(str(exc))
+        return 1
+
+    return 0
+
+
 def run(settings: Settings) -> int:
     """Run algorithmic trading in finite or infinite cycle mode."""
     strategy = create_strategy(settings.strategy, settings)
-    data_provider = build_data_provider(settings)
+    data_provider = build_data_provider(settings, strategy)
     broker = build_broker(settings)
     state_store: StateStore = build_state_store(settings)
 
@@ -151,6 +326,27 @@ def run(settings: Settings) -> int:
     return exit_code
 
 
+def build_liquidation_orders(
+    positions: dict[str, Position],
+    default_order_type: str = "market",
+) -> list[OrderRequest]:
+    """Build offsetting orders that flatten all non-zero positions."""
+    orders: list[OrderRequest] = []
+    for symbol, position in sorted(positions.items()):
+        if position.qty == 0:
+            continue
+        side = OrderSide.SELL if position.qty > 0 else OrderSide.BUY
+        orders.append(
+            OrderRequest(
+                symbol=symbol,
+                qty=abs(position.qty),
+                side=side,
+                order_type=default_order_type,
+            )
+        )
+    return orders
+
+
 def execute_cycle(
     settings: Settings,
     strategy: Strategy,
@@ -187,19 +383,18 @@ def execute_cycle(
     portfolio = broker.get_portfolio()
     positions = broker.get_positions()
     pnl_metrics = compute_equity_metrics(run_metrics, float(portfolio.equity))
-    targets = strategy.decide_targets(bars_by_symbol, portfolio)
+    signal_targets = strategy.decide_targets(bars_by_symbol, portfolio)
+    targets = resolve_target_quantities(signal_targets, latest_prices, settings)
     decision_details: dict[str, dict[str, Any]] = {}
     include_details = settings.mode == "backtest" or strategy.strategy_id == "scalping"
-    lookback_bars = (
-        settings.scalping_lookback_bars
-        if strategy.strategy_id == "scalping"
-        else settings.momentum_lookback_bars
-    )
+    lookback_bars = strategy_diagnostic_lookback_bars(strategy)
 
     for symbol, target in sorted(targets.items()):
         current_qty = positions.get(symbol, Position(symbol=symbol, qty=0)).qty
+        target_signal = float(signal_targets.get(symbol, 0.0))
         payload: dict[str, Any] = {
             "symbol": symbol,
+            "target_signal": target_signal,
             "target_qty": target,
             "current_qty": current_qty,
         }
@@ -210,10 +405,15 @@ def execute_cycle(
                 target_qty=target,
                 current_qty=current_qty,
             )
+            details["target_signal"] = target_signal
             if strategy.strategy_id == "scalping":
-                details["scalping_threshold"] = settings.scalping_threshold
-                details["scalping_flip_seconds"] = settings.scalping_flip_seconds
-                details["scalping_allow_short"] = settings.scalping_allow_short
+                params = getattr(strategy, "params", None)
+                threshold = getattr(params, "threshold", None)
+                allow_short = getattr(params, "allow_short", None)
+                if threshold is not None:
+                    details["scalping_threshold"] = float(threshold)
+                if allow_short is not None:
+                    details["scalping_allow_short"] = bool(allow_short)
             decision_details[symbol] = details
             human_logger.decision(symbol, target, current_qty, details=details)
             payload.update(details)
@@ -233,6 +433,8 @@ def execute_cycle(
         current_positions=positions,
         targets=targets,
         default_order_type=settings.default_order_type,
+        min_trade_qty=settings.min_trade_qty,
+        qty_precision=settings.qty_precision,
     )
     risk_limits = RiskLimits(
         max_abs_position_per_symbol=settings.max_abs_position_per_symbol,
@@ -291,6 +493,7 @@ def execute_cycle(
         "portfolio": serialize_portfolio(portfolio),
         "pnl": pnl_metrics,
         "latest_prices": latest_prices,
+        "target_signals": dict(sorted(signal_targets.items())),
         "positions": serialize_positions(positions),
         "targets": dict(sorted(targets.items())),
         "raw_orders": serialize_orders(raw_orders),
@@ -466,12 +669,12 @@ def build_client_order_id(run_id: str, index: int, symbol: str) -> str:
 def summarize_decision_details(
     bars: Any,
     lookback_bars: int,
-    target_qty: int,
-    current_qty: int,
+    target_qty: float,
+    current_qty: float,
 ) -> dict[str, Any]:
     """Build per-symbol diagnostics used in cycle analysis."""
     details: dict[str, Any] = {
-        "delta_qty": target_qty - current_qty,
+        "delta_qty": round(float(target_qty) - float(current_qty), 8),
     }
     if bars is None:
         return details
@@ -553,6 +756,36 @@ def build_latest_prices(bars_by_symbol: dict[str, Any]) -> dict[str, float]:
     return latest_prices
 
 
+def resolve_target_quantities(
+    signal_targets: dict[str, float],
+    latest_prices: dict[str, float],
+    settings: Settings,
+) -> dict[str, float]:
+    """Convert strategy targets into broker-facing position quantities."""
+    resolved: dict[str, float] = {}
+    sizing_method = settings.order_sizing_method.strip().lower()
+    for symbol, signal in sorted(signal_targets.items()):
+        signal_value = float(signal)
+        target_qty: float
+        if sizing_method == "notional":
+            if signal_value == 0:
+                target_qty = 0.0
+            else:
+                price = latest_prices.get(symbol)
+                if price is None or price <= 0:
+                    target_qty = 0.0
+                else:
+                    target_qty = (signal_value * settings.order_notional_usd) / price
+        else:
+            target_qty = signal_value
+
+        rounded_target = _round_qty(target_qty, settings.qty_precision)
+        if abs(rounded_target) < settings.min_trade_qty:
+            rounded_target = 0.0
+        resolved[symbol] = rounded_target
+    return resolved
+
+
 def extract_receipt_price_details(receipt: Any) -> dict[str, Any]:
     """Extract price/timestamp metadata from broker receipt payloads."""
     raw = receipt.raw if isinstance(receipt.raw, dict) else {}
@@ -592,9 +825,23 @@ def _parse_optional_float(value: Any) -> float | None:
         return None
 
 
-def serialize_positions(positions: dict[str, Position]) -> dict[str, int]:
+def _round_qty(value: float, precision: int) -> float:
+    rounded = round(float(value), max(0, int(precision)))
+    if abs(rounded) < 1e-9:
+        return 0.0
+    return rounded
+
+
+def _qty_key(value: float, precision: int = 8) -> str:
+    return f"{_round_qty(value, precision):.{max(0, precision)}f}"
+
+
+def serialize_positions(positions: dict[str, Position]) -> dict[str, float]:
     """Convert position objects into a deterministic, JSON-friendly mapping."""
-    return {symbol: position.qty for symbol, position in sorted(positions.items())}
+    return {
+        symbol: _round_qty(position.qty, 8)
+        for symbol, position in sorted(positions.items())
+    }
 
 
 def serialize_portfolio(portfolio: Any) -> dict[str, Any]:
@@ -681,12 +928,12 @@ def find_risk_blocked_orders(
     return blocked
 
 
-def _order_signature(order: OrderRequest) -> tuple[str, str, int, str, str]:
+def _order_signature(order: OrderRequest) -> tuple[str, str, str, str, str]:
     """Build a deterministic order signature for multiset comparisons."""
     return (
         order.symbol,
         order.side.value,
-        order.qty,
+        _qty_key(order.qty),
         order.order_type,
         order.time_in_force,
     )
@@ -748,12 +995,13 @@ def resolve_intent_status(
     positions: dict[str, Position],
 ) -> str:
     """Determine reconciled status for a persisted intent."""
+    epsilon = 1e-6
     if intent.client_order_id in open_client_ids:
         return "submitted"
     position_qty = positions.get(intent.symbol, Position(symbol=intent.symbol, qty=0)).qty
-    if intent.side == OrderSide.BUY.value and position_qty >= intent.qty:
+    if intent.side == OrderSide.BUY.value and position_qty + epsilon >= intent.qty:
         return "filled_reconciled"
-    if intent.side == OrderSide.SELL.value and position_qty <= -intent.qty:
+    if intent.side == OrderSide.SELL.value and position_qty - epsilon <= -intent.qty:
         return "filled_reconciled"
     return "stale_reconciled"
 
@@ -771,17 +1019,12 @@ def build_broker(settings: Settings) -> Broker:
     )
 
 
-def build_data_provider(settings: Settings) -> MarketDataProvider:
+def build_data_provider(settings: Settings, strategy: Strategy) -> MarketDataProvider:
     """Select data provider from mode and data source."""
     source = settings.effective_data_source()
     if source == "csv":
         walk_forward = settings.mode == "backtest"
-        warmup_bars = max(
-            settings.sma_long_window + 1,
-            settings.momentum_lookback_bars + 1,
-            settings.scalping_lookback_bars + 1,
-            2,
-        )
+        warmup_bars = strategy_warmup_bars(strategy)
         return CsvDataProvider(
             data_dir=settings.historical_data_dir,
             walk_forward=walk_forward,
@@ -795,6 +1038,29 @@ def build_data_provider(settings: Settings) -> MarketDataProvider:
         data_base_url=settings.alpaca_data_url,
         timeframe=settings.timeframe,
     )
+
+
+def strategy_diagnostic_lookback_bars(strategy: Strategy) -> int:
+    """Resolve lookback horizon from strategy params for decision diagnostics."""
+    params = getattr(strategy, "params", None)
+    lookback = getattr(params, "lookback_bars", None)
+    if isinstance(lookback, (int, float)) and lookback > 0:
+        return int(lookback)
+    long_window = getattr(params, "long_window", None)
+    if isinstance(long_window, (int, float)) and long_window > 0:
+        return int(long_window)
+    return 1
+
+
+def strategy_warmup_bars(strategy: Strategy) -> int:
+    """Resolve minimum historical bars needed to run the strategy."""
+    params = getattr(strategy, "params", None)
+    candidates = [2]
+    for field in ("long_window", "lookback_bars"):
+        value = getattr(params, field, None)
+        if isinstance(value, (int, float)) and value > 0:
+            candidates.append(int(value) + 1)
+    return max(candidates)
 
 
 def build_state_store(settings: Settings) -> StateStore:

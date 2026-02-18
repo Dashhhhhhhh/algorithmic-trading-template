@@ -39,3 +39,19 @@ def test_sqlite_store_persists_run_and_intended_orders(tmp_path: Path) -> None:
     connection.close()
 
     assert row == ("run-1", "live", "sma_crossover")
+
+
+def test_sqlite_store_tracks_fractional_order_qty(tmp_path: Path) -> None:
+    db_path = tmp_path / "state_fractional.db"
+    store = SqliteStateStore(str(db_path))
+    request = OrderRequest(
+        symbol="BTCUSD",
+        qty=0.998,
+        side=OrderSide.SELL,
+        client_order_id="cid-fractional",
+    )
+    store.save_intended_order("run-fractional", request)
+
+    assert store.has_active_intent("BTCUSD", "sell", 0.998)
+    assert not store.has_active_intent("BTCUSD", "sell", 1.0)
+    store.close()
