@@ -12,15 +12,45 @@ class CsvDataProvider:
 
     date_column_candidates = ("date", "datetime", "timestamp")
 
-    def __init__(self, data_dir: str) -> None:
+    def __init__(
+        self,
+        data_dir: str,
+        walk_forward: bool = False,
+        warmup_bars: int = 1,
+    ) -> None:
         self.data_dir = Path(data_dir)
+        self.walk_forward = walk_forward
+        self.warmup_bars = max(1, warmup_bars)
+        self._bars_cache: dict[str, pd.DataFrame] = {}
+        self._cursor_by_symbol: dict[str, int] = {}
 
     def get_bars(self, symbol: str) -> pd.DataFrame:
+        bars = self._load_bars(symbol)
+        if not self.walk_forward:
+            return bars.copy()
+
+        cursor = self._cursor_by_symbol.get(symbol)
+        if cursor is None:
+            cursor = min(self.warmup_bars, len(bars))
+        end = max(1, min(cursor, len(bars)))
+        if cursor < len(bars):
+            self._cursor_by_symbol[symbol] = cursor + 1
+        else:
+            self._cursor_by_symbol[symbol] = len(bars)
+        return bars.iloc[:end].copy()
+
+    def _load_bars(self, symbol: str) -> pd.DataFrame:
+        cached = self._bars_cache.get(symbol)
+        if cached is not None:
+            return cached
+
         path = self._resolve_path(symbol)
         if path is None:
             raise ValueError(f"No CSV found for {symbol} under {self.data_dir}")
         frame = pd.read_csv(path)
-        return self._normalize(frame, symbol)
+        normalized = self._normalize(frame, symbol)
+        self._bars_cache[symbol] = normalized
+        return normalized
 
     def _resolve_path(self, symbol: str) -> Path | None:
         market, bare_symbol = self._split_market_symbol(symbol)

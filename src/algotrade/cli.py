@@ -16,9 +16,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=["backtest", "live"], help="Runtime mode")
     parser.add_argument("--strategy", type=str, help="Strategy id")
     parser.add_argument("--symbols", type=str, help="Comma-separated symbols")
-    parser.add_argument("--once", action="store_true", help="Run one cycle")
-    parser.add_argument("--continuous", action="store_true", help="Run continuously")
-    parser.add_argument("--interval-seconds", type=int, help="Seconds between continuous cycles")
+    parser.add_argument("--cycles", type=int, help="Run a fixed number of cycles")
+    parser.add_argument(
+        "--interval-seconds", type=int, help="Seconds between full execution cycles"
+    )
     parser.add_argument("--historical-dir", type=str, help="CSV historical data directory")
     parser.add_argument("--state-db", type=str, help="SQLite state database path")
     parser.add_argument("--events-dir", type=str, help="Run outputs directory")
@@ -28,9 +29,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def apply_cli_overrides(settings: Settings, args: argparse.Namespace) -> Settings:
     """Apply CLI values onto environment-derived settings."""
-    if args.once and args.continuous:
-        raise ValueError("Use either --once or --continuous, not both")
-
     overrides: dict[str, object] = {}
     if args.mode:
         overrides["mode"] = args.mode
@@ -38,12 +36,8 @@ def apply_cli_overrides(settings: Settings, args: argparse.Namespace) -> Setting
         overrides["strategy"] = args.strategy
     if args.symbols:
         overrides["symbols"] = parse_symbols(args.symbols, settings.symbols)
-    if args.once:
-        overrides["once"] = True
-        overrides["continuous"] = False
-    if args.continuous:
-        overrides["continuous"] = True
-        overrides["once"] = False
+    if args.cycles is not None:
+        overrides["cycles"] = args.cycles
     if args.interval_seconds is not None:
         overrides["interval_seconds"] = args.interval_seconds
     if args.historical_dir:

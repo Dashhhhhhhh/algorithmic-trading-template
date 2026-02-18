@@ -24,6 +24,19 @@ def parse_bool(value: str | None, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def parse_optional_positive_int(value: str | None) -> int | None:
+    """Parse optional positive integer values from env strings."""
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    parsed = int(text)
+    if parsed <= 0:
+        raise ValueError("cycles must be positive")
+    return parsed
+
+
 def parse_symbols(value: str | None, default: list[str] | None = None) -> list[str]:
     """Parse comma-separated symbols."""
     fallback = default or ["SPY"]
@@ -101,8 +114,7 @@ class Settings:
     mode: Mode = "live"
     strategy: str = "sma_crossover"
     symbols: list[str] = field(default_factory=lambda: ["SPY"])
-    once: bool = False
-    continuous: bool = False
+    cycles: int | None = None
     interval_seconds: int = 5
     data_source: str = "auto"
     historical_data_dir: str = "historical_data"
@@ -146,9 +158,10 @@ class Settings:
             mode=mode,
             strategy=str(os.getenv("STRATEGY", "sma_crossover")).strip(),
             symbols=symbols,
-            once=parse_bool(os.getenv("ONCE"), False),
-            continuous=parse_bool(os.getenv("CONTINUOUS"), False),
-            interval_seconds=int(os.getenv("INTERVAL_SECONDS", "5")),
+            cycles=parse_optional_positive_int(os.getenv("CYCLES")),
+            interval_seconds=int(
+                os.getenv("INTERVAL_SECONDS") or os.getenv("POLLING_INTERVAL_SECONDS", "5")
+            ),
             data_source=str(os.getenv("DATA_SOURCE", "auto")).strip().lower(),
             historical_data_dir=str(os.getenv("HISTORICAL_DATA_DIR", "historical_data")).strip(),
             events_dir=str(os.getenv("EVENTS_DIR", "runs")).strip(),
@@ -190,13 +203,13 @@ class Settings:
         updated = replace(self, **overrides)
         return updated.validate()
 
-    def should_run_continuously(self) -> bool:
-        """Resolve once versus continuous behavior."""
-        if self.once:
-            return False
-        if self.continuous:
-            return True
-        return self.mode == "live"
+    def cycle_limit(self) -> int | None:
+        """Return finite cycle count or None for infinite execution."""
+        if self.cycles is not None:
+            return self.cycles
+        if self.mode == "backtest":
+            return 1
+        return None
 
     def effective_data_source(self) -> str:
         """Resolve mode-aware data source defaults."""
@@ -210,6 +223,8 @@ class Settings:
         """Validate settings fields."""
         if self.interval_seconds <= 0:
             raise ValueError("interval_seconds must be positive")
+        if self.cycles is not None and self.cycles <= 0:
+            raise ValueError("cycles must be positive")
         if self.order_qty <= 0:
             raise ValueError("order_qty must be positive")
         if self.max_abs_position_per_symbol <= 0:

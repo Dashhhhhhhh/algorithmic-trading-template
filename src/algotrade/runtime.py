@@ -54,7 +54,7 @@ class NoopStateStore:
 
 
 def run(settings: Settings) -> int:
-    """Run algorithmic trading in once or continuous mode."""
+    """Run algorithmic trading in finite or infinite cycle mode."""
     strategy = create_strategy(settings.strategy, settings)
     data_provider = build_data_provider(settings)
     broker = build_broker(settings)
@@ -98,7 +98,8 @@ def run(settings: Settings) -> int:
 
     exit_code = 0
     try:
-        if settings.should_run_continuously():
+        cycle_limit = settings.cycle_limit()
+        if cycle_limit is None:
             while True:
                 execute_cycle(
                     settings=settings,
@@ -113,17 +114,20 @@ def run(settings: Settings) -> int:
                 )
                 sleep(float(settings.interval_seconds))
         else:
-            execute_cycle(
-                settings=settings,
-                strategy=strategy,
-                data_provider=data_provider,
-                broker=broker,
-                state_store=state_store,
-                run_id=run_id,
-                event_sink=event_sink,
-                human_logger=human_logger,
-                run_metrics=run_metrics,
-            )
+            for index in range(cycle_limit):
+                execute_cycle(
+                    settings=settings,
+                    strategy=strategy,
+                    data_provider=data_provider,
+                    broker=broker,
+                    state_store=state_store,
+                    run_id=run_id,
+                    event_sink=event_sink,
+                    human_logger=human_logger,
+                    run_metrics=run_metrics,
+                )
+                if index < cycle_limit - 1:
+                    sleep(float(settings.interval_seconds))
     except KeyboardInterrupt:
         exit_code = 0
     except Exception as exc:
@@ -771,7 +775,18 @@ def build_data_provider(settings: Settings) -> MarketDataProvider:
     """Select data provider from mode and data source."""
     source = settings.effective_data_source()
     if source == "csv":
-        return CsvDataProvider(data_dir=settings.historical_data_dir)
+        walk_forward = settings.mode == "backtest"
+        warmup_bars = max(
+            settings.sma_long_window + 1,
+            settings.momentum_lookback_bars + 1,
+            settings.scalping_lookback_bars + 1,
+            2,
+        )
+        return CsvDataProvider(
+            data_dir=settings.historical_data_dir,
+            walk_forward=walk_forward,
+            warmup_bars=warmup_bars,
+        )
     if not settings.alpaca_api_key or not settings.alpaca_secret_key:
         raise ValueError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required for Alpaca data")
     return AlpacaMarketDataProvider(

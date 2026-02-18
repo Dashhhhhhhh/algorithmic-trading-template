@@ -7,7 +7,6 @@ import pytest
 from algotrade.cli import apply_cli_overrides, build_parser
 from algotrade.config import Settings
 
-
 ENV_KEYS = [
     "MODE",
     "STRATEGY",
@@ -26,7 +25,9 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(key, raising=False)
 
 
-def test_settings_precedence_config_env_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_settings_precedence_config_env_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr("algotrade.config.load_dotenv", lambda *args, **kwargs: None)
     _clear_env(monkeypatch)
 
@@ -62,13 +63,12 @@ paper = true
     assert settings.alpaca_api_key == "env_key"
 
     parser = build_parser()
-    args = parser.parse_args(["--mode", "backtest", "--strategy", "sma_crossover", "--once"])
+    args = parser.parse_args(["--mode", "backtest", "--strategy", "sma_crossover", "--cycles", "1"])
     merged = apply_cli_overrides(settings, args)
 
     assert merged.mode == "backtest"
     assert merged.strategy == "sma_crossover"
-    assert merged.once is True
-    assert merged.continuous is False
+    assert merged.cycles == 1
 
 
 def test_settings_requires_alpaca_credentials_for_paper(monkeypatch: pytest.MonkeyPatch) -> None:
