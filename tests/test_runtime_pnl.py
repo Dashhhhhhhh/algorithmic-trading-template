@@ -46,6 +46,7 @@ class StubEventSink:
 class StubLogger:
     def __init__(self) -> None:
         self.pnl_calls: list[tuple[float, float, float, float | None]] = []
+        self.progress_calls: list[tuple[int, int, float, float, float | None]] = []
 
     def run_started(
         self,
@@ -67,6 +68,24 @@ class StubLogger:
 
     def error(self, message: str) -> None:
         _ = message
+
+    def backtest_progress(
+        self,
+        completed_steps: int,
+        total_steps: int,
+        elapsed_seconds: float,
+        steps_per_second: float,
+        eta_seconds: float | None = None,
+    ) -> None:
+        self.progress_calls.append(
+            (
+                completed_steps,
+                total_steps,
+                elapsed_seconds,
+                steps_per_second,
+                eta_seconds,
+            )
+        )
 
 
 def _patch_runtime_dependencies(
@@ -94,7 +113,7 @@ def _patch_runtime_dependencies(
     monkeypatch.setattr(runtime, "reconcile_state", lambda **_kwargs: None)
 
 
-def test_run_logs_pnl_when_cycle_limit_is_reached(
+def test_run_logs_pnl_when_live_pass_limit_is_reached(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -118,7 +137,7 @@ def test_run_logs_pnl_when_cycle_limit_is_reached(
             mode="live",
             strategy="scalping",
             symbols=["BTCUSD"],
-            cycles=2,
+            max_passes=2,
             events_dir=str(tmp_path),
         )
     )
@@ -154,7 +173,6 @@ def test_run_logs_pnl_after_keyboard_interrupt(
             mode="live",
             strategy="scalping",
             symbols=["BTCUSD"],
-            cycles=None,
             events_dir=str(tmp_path),
         )
     )
@@ -163,3 +181,52 @@ def test_run_logs_pnl_after_keyboard_interrupt(
     assert len(logger_instances) == 1
     assert logger_instances[0].pnl_calls == [(1020.0, 20.0, 0.02, 1000.0)]
     assert state_store.closed is True
+
+
+def test_run_backtest_respects_step_cap_and_logs_progress(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    broker = StubBroker(equity=1005.0)
+    state_store = StubStateStore()
+    logger_instances: list[StubLogger] = []
+    _patch_runtime_dependencies(
+        monkeypatch,
+        broker=broker,
+        state_store=state_store,
+        logger_instances=logger_instances,
+    )
+
+    class StubBacktestProvider:
+        def walk_forward_total_steps(self, symbols: list[str]) -> int:
+            assert symbols == ["BTCUSD"]
+            return 7
+
+    monkeypatch.setattr(
+        runtime,
+        "build_data_provider",
+        lambda _settings, _strategy: StubBacktestProvider(),
+    )
+
+    calls = {"count": 0}
+
+    def fake_execute_cycle(**_kwargs) -> None:
+        calls["count"] += 1
+
+    monkeypatch.setattr(runtime, "execute_cycle", fake_execute_cycle)
+
+    exit_code = runtime.run(
+        Settings(
+            mode="backtest",
+            strategy="scalping",
+            symbols=["BTCUSD"],
+            backtest_max_steps=3,
+            events_dir=str(tmp_path),
+        )
+    )
+
+    assert exit_code == 0
+    assert calls["count"] == 3
+    assert len(logger_instances) == 1
+    assert logger_instances[0].progress_calls
+    assert logger_instances[0].progress_calls[-1][0:2] == (3, 3)

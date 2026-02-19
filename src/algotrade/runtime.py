@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
-from time import sleep
+from time import perf_counter, sleep
 from typing import Any
 from uuid import uuid4
 
@@ -184,9 +184,7 @@ def liquidate(settings: Settings) -> int:
                 human_logger.order_update(
                     order_id=str(update.get("id", "liquidate")),
                     status=str(update.get("status", "submitted")),
-                    client_order_id=(
-                        str(update.get("client_order_id", "")) or None
-                    ),
+                    client_order_id=(str(update.get("client_order_id", "")) or None),
                     details={
                         key: update[key]
                         for key in ("filled_avg_price", "submitted_at", "filled_at", "updated_at")
@@ -236,7 +234,7 @@ def liquidate(settings: Settings) -> int:
 
 
 def run(settings: Settings) -> int:
-    """Run algorithmic trading in finite or infinite cycle mode."""
+    """Run algorithmic trading in live or backtest mode."""
     strategy = create_strategy(settings.strategy, settings)
     data_provider = build_data_provider(settings, strategy)
     broker = build_broker(settings)
@@ -280,9 +278,11 @@ def run(settings: Settings) -> int:
 
     exit_code = 0
     try:
-        cycle_limit = settings.cycle_limit()
-        if cycle_limit is None:
-            while True:
+        if settings.mode == "backtest":
+            total_steps = resolve_backtest_total_steps(settings, data_provider)
+            progress_interval = resolve_backtest_progress_interval(total_steps)
+            started_at = perf_counter()
+            for index in range(total_steps):
                 execute_cycle(
                     settings=settings,
                     strategy=strategy,
@@ -294,22 +294,57 @@ def run(settings: Settings) -> int:
                     human_logger=human_logger,
                     run_metrics=run_metrics,
                 )
-                sleep(float(settings.interval_seconds))
+                completed_steps = index + 1
+                if should_emit_backtest_progress(
+                    completed_steps=completed_steps,
+                    total_steps=total_steps,
+                    progress_interval=progress_interval,
+                ):
+                    elapsed_seconds = perf_counter() - started_at
+                    steps_per_second = (
+                        float(completed_steps) / elapsed_seconds if elapsed_seconds > 0 else 0.0
+                    )
+                    eta_seconds: float | None = None
+                    if steps_per_second > 0 and completed_steps < total_steps:
+                        eta_seconds = float(total_steps - completed_steps) / steps_per_second
+                    human_logger.backtest_progress(
+                        completed_steps=completed_steps,
+                        total_steps=total_steps,
+                        elapsed_seconds=elapsed_seconds,
+                        steps_per_second=steps_per_second,
+                        eta_seconds=eta_seconds,
+                    )
         else:
-            for index in range(cycle_limit):
-                execute_cycle(
-                    settings=settings,
-                    strategy=strategy,
-                    data_provider=data_provider,
-                    broker=broker,
-                    state_store=state_store,
-                    run_id=run_id,
-                    event_sink=event_sink,
-                    human_logger=human_logger,
-                    run_metrics=run_metrics,
-                )
-                if index < cycle_limit - 1:
+            pass_limit = settings.live_pass_limit()
+            if pass_limit is None:
+                while True:
+                    execute_cycle(
+                        settings=settings,
+                        strategy=strategy,
+                        data_provider=data_provider,
+                        broker=broker,
+                        state_store=state_store,
+                        run_id=run_id,
+                        event_sink=event_sink,
+                        human_logger=human_logger,
+                        run_metrics=run_metrics,
+                    )
                     sleep(float(settings.interval_seconds))
+            else:
+                for index in range(pass_limit):
+                    execute_cycle(
+                        settings=settings,
+                        strategy=strategy,
+                        data_provider=data_provider,
+                        broker=broker,
+                        state_store=state_store,
+                        run_id=run_id,
+                        event_sink=event_sink,
+                        human_logger=human_logger,
+                        run_metrics=run_metrics,
+                    )
+                    if index < pass_limit - 1:
+                        sleep(float(settings.interval_seconds))
     except KeyboardInterrupt:
         exit_code = 0
     except Exception as exc:
@@ -819,8 +854,8 @@ def resolve_target_quantities(
                         signal_value=signal_value,
                         signal_cap=strategy_signal_cap,
                     )
-                    target_fraction = (
-                        min_fraction + ((max_fraction - min_fraction) * signal_strength)
+                    target_fraction = min_fraction + (
+                        (max_fraction - min_fraction) * signal_strength
                     )
                     target_notional = equity * target_fraction
                     target_qty = (target_notional / price) * (1 if signal_value > 0 else -1)
@@ -892,10 +927,7 @@ def _qty_key(value: float, precision: int = 8) -> str:
 
 def serialize_positions(positions: dict[str, Position]) -> dict[str, float]:
     """Convert position objects into a deterministic, JSON-friendly mapping."""
-    return {
-        symbol: _round_qty(position.qty, 8)
-        for symbol, position in sorted(positions.items())
-    }
+    return {symbol: _round_qty(position.qty, 8) for symbol, position in sorted(positions.items())}
 
 
 def serialize_portfolio(portfolio: Any) -> dict[str, Any]:
@@ -999,6 +1031,38 @@ def build_bars_by_symbol(symbols: list[str], data_provider: MarketDataProvider) 
     for symbol in symbols:
         bars_by_symbol[symbol] = data_provider.get_bars(symbol)
     return bars_by_symbol
+
+
+def resolve_backtest_total_steps(settings: Settings, data_provider: MarketDataProvider) -> int:
+    """Resolve walk-forward step count for a backtest run."""
+    total_steps = 1
+    get_total_steps = getattr(data_provider, "walk_forward_total_steps", None)
+    if callable(get_total_steps):
+        total_steps = int(get_total_steps(settings.symbols))
+    cap = settings.backtest_step_cap()
+    if cap is not None:
+        total_steps = min(total_steps, cap)
+    return max(1, total_steps)
+
+
+def resolve_backtest_progress_interval(total_steps: int) -> int:
+    """Resolve progress log cadence to keep output informative but lightweight."""
+    if total_steps <= 20:
+        return 1
+    return max(1, total_steps // 20)
+
+
+def should_emit_backtest_progress(
+    completed_steps: int,
+    total_steps: int,
+    progress_interval: int,
+) -> bool:
+    """Determine whether to emit a backtest progress line."""
+    return (
+        completed_steps == 1
+        or completed_steps == total_steps
+        or completed_steps % max(1, progress_interval) == 0
+    )
 
 
 def reconcile_state(

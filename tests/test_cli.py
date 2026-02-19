@@ -16,7 +16,7 @@ def test_cli_overrides_produce_expected_settings() -> None:
             "cross_sectional_momentum",
             "--symbols",
             "SPY,AAPL",
-            "--cycles",
+            "--backtest-max-steps",
             "3",
             "--interval-seconds",
             "9",
@@ -35,8 +35,8 @@ def test_cli_overrides_produce_expected_settings() -> None:
     assert settings.mode == "backtest"
     assert settings.strategy == "cross_sectional_momentum"
     assert settings.symbols == ["SPY", "AAPL"]
-    assert settings.cycles == 3
-    assert settings.cycle_limit() == 3
+    assert settings.backtest_max_steps == 3
+    assert settings.backtest_step_cap() == 3
     assert settings.interval_seconds == 9
     assert settings.historical_data_dir == "historical_data"
     assert settings.state_db_path == "state/test.db"
@@ -44,21 +44,29 @@ def test_cli_overrides_produce_expected_settings() -> None:
     assert settings.effective_data_source() == "csv"
 
 
-def test_cli_rejects_non_positive_cycles() -> None:
+def test_cli_rejects_non_positive_max_passes() -> None:
     parser = build_parser()
-    args = parser.parse_args(["--cycles", "0"])
+    args = parser.parse_args(["--max-passes", "0"])
 
     with pytest.raises(ValueError):
         apply_cli_overrides(Settings(), args)
 
 
-def test_backtest_defaults_to_single_cycle_without_flags() -> None:
+def test_cli_rejects_non_positive_backtest_step_cap() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--mode", "backtest", "--backtest-max-steps", "0"])
+
+    with pytest.raises(ValueError):
+        apply_cli_overrides(Settings(), args)
+
+
+def test_backtest_defaults_to_full_history_without_step_cap() -> None:
     parser = build_parser()
     args = parser.parse_args(["--mode", "backtest"])
     settings = apply_cli_overrides(Settings(), args)
 
-    assert settings.cycles is None
-    assert settings.cycle_limit() == 1
+    assert settings.backtest_max_steps is None
+    assert settings.backtest_step_cap() is None
 
 
 def test_live_defaults_to_continuous_without_flags() -> None:
@@ -66,17 +74,33 @@ def test_live_defaults_to_continuous_without_flags() -> None:
     args = parser.parse_args(["--mode", "live"])
     settings = apply_cli_overrides(Settings(), args)
 
-    assert settings.cycles is None
-    assert settings.cycle_limit() is None
+    assert settings.max_passes is None
+    assert settings.live_pass_limit() is None
 
 
-def test_live_can_be_limited_with_cycles() -> None:
+def test_live_can_be_limited_with_max_passes() -> None:
     parser = build_parser()
-    args = parser.parse_args(["--mode", "live", "--cycles", "2"])
+    args = parser.parse_args(["--mode", "live", "--max-passes", "2"])
     settings = apply_cli_overrides(Settings(), args)
 
     assert settings.mode == "live"
-    assert settings.cycle_limit() == 2
+    assert settings.live_pass_limit() == 2
+
+
+def test_cli_rejects_max_passes_in_backtest_mode() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--mode", "backtest", "--max-passes", "2"])
+
+    with pytest.raises(ValueError, match="--max-passes requires --mode live"):
+        apply_cli_overrides(Settings(), args)
+
+
+def test_cli_rejects_backtest_max_steps_in_live_mode() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--mode", "live", "--backtest-max-steps", "2"])
+
+    with pytest.raises(ValueError, match="--backtest-max-steps requires --mode backtest"):
+        apply_cli_overrides(Settings(), args)
 
 
 def test_cli_does_not_accept_legacy_once_or_continuous_flags() -> None:

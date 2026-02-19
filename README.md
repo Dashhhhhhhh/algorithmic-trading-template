@@ -47,13 +47,10 @@ uv run algotrade --help
 
 Execution is mode-driven:
 
-- `live`: runs continuously by default
-- `backtest`: runs a finite number of cycles (defaults to `1`)
+- `live`: runs continuously by default (optional finite cap via `--max-passes`)
+- `backtest`: runs walk-forward across the full historical dataset by default
 
-Use `--cycles N` (or `CYCLES=N`) to force a finite run in either mode.
-
-- `N` must be `>= 1`
-- exactly `N` full cycles are executed, then the process exits
+Use `--backtest-max-steps N` (or `BACKTEST_MAX_STEPS=N`) to intentionally cap a backtest.
 
 ## Quick Start
 
@@ -92,19 +89,24 @@ Notes:
 
 Scalping uses TA-Lib indicators when installed and falls back to pandas math when TA-Lib is unavailable.
 
-Backtest C runs replay bars in walk-forward order across cycles. Once the end of a symbol's dataset is reached, subsequent cycles use the final bar and PnL will plateau.
+Backtest mode replays bars in walk-forward order and stops when the dataset is fully consumed.
 
-### Backtest (runs on preset historical data typically in a .csv/excellike format) (fixed cycle count)
+### Backtest (full historical walk-forward by default)
 
 ```bash
-uv run algotrade --mode backtest --strategy cross_sectional_momentum --symbols SPY,QQQ,AAPL --cycles 5
+uv run algotrade --mode backtest --strategy cross_sectional_momentum --symbols SPY,QQQ,AAPL
 ```
 
-
-### Live (finite cycle count)
+### Backtest (optional capped run for debugging)
 
 ```bash
-uv run algotrade --mode live --strategy arbitrage --symbols SPY,QQQ --cycles 3
+uv run algotrade --mode backtest --strategy cross_sectional_momentum --symbols SPY,QQQ,AAPL --backtest-max-steps 500
+```
+
+### Live (optional finite pass count)
+
+```bash
+uv run algotrade --mode live --strategy arbitrage --symbols SPY,QQQ --max-passes 3
 ```
 
 ### Liquidate (flatten all live positions and exit)
@@ -140,9 +142,9 @@ Set `SYMBOLS=...` (or `--symbols ...`) to explicitly override the universe.
 
 For CSV backtests, symbols can include market prefixes, for example `CRYPTO:BTCUSD` which resolves to `historical_data/CRYPTO/BTCUSD.csv`.
 
-### Cycle Timing
+### Execution Timing
 
-`INTERVAL_SECONDS` controls how often a full cycle runs (fetch data -> decide -> submit).
+`INTERVAL_SECONDS` controls how often a full live pass runs (fetch data -> decide -> submit).
 `POLLING_INTERVAL_SECONDS` is supported as an alias.
 
 Example:
@@ -151,7 +153,7 @@ Example:
 INTERVAL_SECONDS=5
 ```
 
-In finite mode (`--cycles N`), interval applies between cycles. In continuous live mode, it applies indefinitely.
+In finite live mode (`--max-passes N`), interval applies between passes. In continuous live mode, it applies indefinitely. Backtests do not sleep between walk-forward steps.
 
 ### Position Sizing
 
@@ -178,7 +180,8 @@ Supported options:
 - `--mode {backtest,live}`
 - `--strategy <id>`
 - `--symbols <comma,separated>`
-- `--cycles <N>`
+- `--max-passes <N>`
+- `--backtest-max-steps <N>`
 - `--interval-seconds <int>`
 - `--historical-dir <path>`
 - `--state-db <path>`

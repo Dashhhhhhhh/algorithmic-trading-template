@@ -16,9 +16,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=["backtest", "live"], help="Runtime mode")
     parser.add_argument("--strategy", type=str, help="Strategy id")
     parser.add_argument("--symbols", type=str, help="Comma-separated symbols")
-    parser.add_argument("--cycles", type=int, help="Run a fixed number of cycles")
+    parser.add_argument("--max-passes", type=int, help="Run a fixed number of live passes")
     parser.add_argument(
-        "--interval-seconds", type=int, help="Seconds between full execution cycles"
+        "--backtest-max-steps",
+        type=int,
+        help="Cap walk-forward steps in backtest mode",
+    )
+    parser.add_argument(
+        "--interval-seconds", type=int, help="Seconds between full live execution passes"
     )
     parser.add_argument("--historical-dir", type=str, help="CSV historical data directory")
     parser.add_argument("--state-db", type=str, help="SQLite state database path")
@@ -39,6 +44,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def apply_cli_overrides(settings: Settings, args: argparse.Namespace) -> Settings:
     """Apply CLI values onto environment-derived settings."""
+    requested_mode = args.mode or settings.mode
+    if args.max_passes is not None and requested_mode != "live":
+        raise ValueError("--max-passes requires --mode live")
+    if args.backtest_max_steps is not None and requested_mode != "backtest":
+        raise ValueError("--backtest-max-steps requires --mode backtest")
+
     overrides: dict[str, object] = {}
     if args.mode:
         overrides["mode"] = args.mode
@@ -46,8 +57,10 @@ def apply_cli_overrides(settings: Settings, args: argparse.Namespace) -> Setting
         overrides["strategy"] = args.strategy
     if args.symbols:
         overrides["symbols"] = parse_symbols(args.symbols, settings.symbols)
-    if args.cycles is not None:
-        overrides["cycles"] = args.cycles
+    if args.max_passes is not None:
+        overrides["max_passes"] = args.max_passes
+    if args.backtest_max_steps is not None:
+        overrides["backtest_max_steps"] = args.backtest_max_steps
     if args.interval_seconds is not None:
         overrides["interval_seconds"] = args.interval_seconds
     if args.historical_dir:

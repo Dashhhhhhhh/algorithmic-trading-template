@@ -24,7 +24,7 @@ def parse_bool(value: str | None, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def parse_optional_positive_int(value: str | None) -> int | None:
+def parse_optional_positive_int(value: str | None, *, field_name: str) -> int | None:
     """Parse optional positive integer values from env strings."""
     if value is None:
         return None
@@ -33,7 +33,7 @@ def parse_optional_positive_int(value: str | None) -> int | None:
         return None
     parsed = int(text)
     if parsed <= 0:
-        raise ValueError("cycles must be positive")
+        raise ValueError(f"{field_name} must be positive")
     return parsed
 
 
@@ -114,7 +114,8 @@ class Settings:
     mode: Mode = "live"
     strategy: str = ""
     symbols: list[str] = field(default_factory=lambda: ["SPY"])
-    cycles: int | None = None
+    max_passes: int | None = None
+    backtest_max_steps: int | None = None
     interval_seconds: int = 5
     data_source: str = "auto"
     historical_data_dir: str = "historical_data"
@@ -141,6 +142,16 @@ class Settings:
         if load_dotenv is not None:
             load_dotenv()
         mode = normalize_mode(os.getenv("MODE"), default="live")
+        max_passes = parse_optional_positive_int(
+            os.getenv("MAX_PASSES"),
+            field_name="max_passes",
+        )
+        if max_passes is None and mode == "live":
+            # Legacy alias for live mode only.
+            max_passes = parse_optional_positive_int(
+                os.getenv("CYCLES"),
+                field_name="cycles",
+            )
         strategy = str(os.getenv("STRATEGY", "")).strip()
         symbols = resolve_symbol_universe(
             explicit_symbols=os.getenv("SYMBOLS"),
@@ -152,7 +163,11 @@ class Settings:
             mode=mode,
             strategy=strategy,
             symbols=symbols,
-            cycles=parse_optional_positive_int(os.getenv("CYCLES")),
+            max_passes=max_passes,
+            backtest_max_steps=parse_optional_positive_int(
+                os.getenv("BACKTEST_MAX_STEPS"),
+                field_name="backtest_max_steps",
+            ),
             interval_seconds=int(
                 os.getenv("INTERVAL_SECONDS") or os.getenv("POLLING_INTERVAL_SECONDS", "5")
             ),
@@ -162,16 +177,12 @@ class Settings:
             state_db_path=str(os.getenv("STATE_DB_PATH", "state/algotrade_state.db")).strip(),
             log_level=str(os.getenv("LOG_LEVEL", "INFO")).strip().upper(),
             default_order_type=str(os.getenv("DEFAULT_ORDER_TYPE", "market")).strip(),
-            order_sizing_method=str(
-                os.getenv("ORDER_SIZING_METHOD", "notional")
-            ).strip().lower(),
+            order_sizing_method=str(os.getenv("ORDER_SIZING_METHOD", "notional")).strip().lower(),
             order_notional_usd=float(os.getenv("ORDER_NOTIONAL_USD", "100")),
             min_trade_qty=float(os.getenv("MIN_TRADE_QTY", "0.0001")),
             qty_precision=int(os.getenv("QTY_PRECISION", "6")),
             allow_short=parse_bool(os.getenv("ALLOW_SHORT"), True),
-            max_abs_position_per_symbol=float(
-                os.getenv("MAX_ABS_POSITION_PER_SYMBOL", "100")
-            ),
+            max_abs_position_per_symbol=float(os.getenv("MAX_ABS_POSITION_PER_SYMBOL", "100")),
             alpaca_api_key=str(os.getenv("ALPACA_API_KEY", "")).strip(),
             alpaca_secret_key=str(os.getenv("ALPACA_SECRET_KEY", "")).strip(),
             alpaca_base_url=str(
@@ -194,13 +205,17 @@ class Settings:
         updated = replace(self, **overrides)
         return updated.validate()
 
+    def live_pass_limit(self) -> int | None:
+        """Return finite live pass count, or None for continuous execution."""
+        return self.max_passes
+
+    def backtest_step_cap(self) -> int | None:
+        """Return optional backtest step cap."""
+        return self.backtest_max_steps
+
     def cycle_limit(self) -> int | None:
-        """Return finite cycle count or None for infinite execution."""
-        if self.cycles is not None:
-            return self.cycles
-        if self.mode == "backtest":
-            return 1
-        return None
+        """Backward-compatible alias for legacy finite-run semantics."""
+        return self.live_pass_limit()
 
     def effective_data_source(self) -> str:
         """Resolve mode-aware data source defaults."""
@@ -214,8 +229,10 @@ class Settings:
         """Validate settings fields."""
         if self.interval_seconds <= 0:
             raise ValueError("interval_seconds must be positive")
-        if self.cycles is not None and self.cycles <= 0:
-            raise ValueError("cycles must be positive")
+        if self.max_passes is not None and self.max_passes <= 0:
+            raise ValueError("max_passes must be positive")
+        if self.backtest_max_steps is not None and self.backtest_max_steps <= 0:
+            raise ValueError("backtest_max_steps must be positive")
         if self.order_sizing_method not in {"units", "notional"}:
             raise ValueError("order_sizing_method must be one of units, notional")
         if self.order_notional_usd <= 0:
@@ -228,6 +245,10 @@ class Settings:
             raise ValueError("max_abs_position_per_symbol must be positive")
         if self.mode not in {"backtest", "live"}:
             raise ValueError("mode must be one of backtest, live")
+        if self.mode == "backtest" and self.max_passes is not None:
+            raise ValueError("max_passes is only valid in live mode")
+        if self.mode == "live" and self.backtest_max_steps is not None:
+            raise ValueError("backtest_max_steps is only valid in backtest mode")
         if self.data_source not in {"auto", "alpaca", "csv"}:
             raise ValueError("data_source must be one of auto, alpaca, csv")
         return self

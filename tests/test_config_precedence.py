@@ -39,7 +39,7 @@ def test_settings_precedence_env_then_cli(monkeypatch: pytest.MonkeyPatch) -> No
             "backtest",
             "--strategy",
             "cross_sectional_momentum",
-            "--cycles",
+            "--backtest-max-steps",
             "1",
         ]
     )
@@ -47,7 +47,7 @@ def test_settings_precedence_env_then_cli(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert merged.mode == "backtest"
     assert merged.strategy == "cross_sectional_momentum"
-    assert merged.cycles == 1
+    assert merged.backtest_max_steps == 1
 
 
 def test_mode_paper_is_normalized_to_live(monkeypatch: pytest.MonkeyPatch) -> None:

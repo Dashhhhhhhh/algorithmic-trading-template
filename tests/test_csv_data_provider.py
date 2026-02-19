@@ -58,6 +58,27 @@ def test_csv_provider_walk_forward_advances_until_end(tmp_path: Path) -> None:
     assert float(third["close"].iloc[-1]) == 103.5
 
 
+def test_csv_provider_reports_walk_forward_total_steps(tmp_path: Path) -> None:
+    _write_csv(tmp_path / "SPY.csv")
+    frame = pd.DataFrame(
+        {
+            "date": ["2025-01-01", "2025-01-02", "2025-01-03"],
+            "open": [200.0, 201.0, 202.0],
+            "high": [201.0, 202.0, 203.0],
+            "low": [199.0, 200.0, 201.0],
+            "close": [200.5, 201.5, 202.5],
+            "volume": [100.0, 101.0, 102.0],
+        }
+    )
+    frame.to_csv(tmp_path / "AAPL.csv", index=False)
+    provider = CsvDataProvider(data_dir=str(tmp_path), walk_forward=True, warmup_bars=2)
+
+    steps = provider.walk_forward_total_steps(["SPY", "AAPL"])
+
+    # SPY contributes 3 steps (2,3,4 bars), AAPL contributes 2 (2,3 bars).
+    assert steps == 3
+
+
 def _fallback_bars() -> pd.DataFrame:
     return pd.DataFrame(
         {

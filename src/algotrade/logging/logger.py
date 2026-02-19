@@ -62,8 +62,7 @@ class HumanLogger:
             buy_amount_text = f"{buy_amount_text} (${buy_amount * reference_price:,.2f})"
             sell_amount_text = f"{sell_amount_text} (${sell_amount * reference_price:,.2f})"
         parts = [
-            f"submit | {symbol} | buy_amount {buy_amount_text} "
-            f"| sell_amount {sell_amount_text}"
+            f"submit | {symbol} | buy_amount {buy_amount_text} | sell_amount {sell_amount_text}"
         ]
         if reference_price is not None:
             parts.append(f"ref ${reference_price:,.3f}")
@@ -90,9 +89,7 @@ class HumanLogger:
             if filled_notional is not None:
                 parts.append(f"fill_usd ${filled_notional:,.2f}")
             event_time = (
-                details.get("filled_at")
-                or details.get("updated_at")
-                or details.get("submitted_at")
+                details.get("filled_at") or details.get("updated_at") or details.get("submitted_at")
             )
             if isinstance(event_time, str) and event_time.strip():
                 parts.append(f"at {self._short_ts(event_time)}")
@@ -118,6 +115,26 @@ class HumanLogger:
             details,
         )
         return None
+
+    def backtest_progress(
+        self,
+        completed_steps: int,
+        total_steps: int,
+        elapsed_seconds: float,
+        steps_per_second: float,
+        eta_seconds: float | None = None,
+    ) -> None:
+        total = max(1, int(total_steps))
+        completed = max(0, min(int(completed_steps), total))
+        pct_complete = (float(completed) / float(total)) * 100.0
+        parts = [
+            f"backtest | step {completed}/{total} ({pct_complete:.1f}%)",
+            f"elapsed {elapsed_seconds:.1f}s",
+            f"speed {steps_per_second:.2f} steps/s",
+        ]
+        if eta_seconds is not None and completed < total:
+            parts.append(f"eta {max(0.0, eta_seconds):.1f}s")
+        self._logger.info(" | ".join(parts))
 
     def portfolio(self, cash: float, equity: float, buying_power: float) -> None:
         self._logger.info(

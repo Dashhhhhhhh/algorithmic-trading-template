@@ -45,6 +45,17 @@ class CsvDataProvider:
             self._cursor_by_symbol[symbol] = len(bars)
         return bars.iloc[:end].copy()
 
+    def walk_forward_total_steps(self, symbols: list[str]) -> int:
+        """Return total walk-forward steps needed to traverse all symbol histories."""
+        if not self.walk_forward:
+            return 1
+        step_counts: list[int] = []
+        for symbol in symbols:
+            bars = self._load_bars(symbol)
+            initial_window = min(self.warmup_bars, len(bars))
+            step_counts.append(max(1, len(bars) - initial_window + 1))
+        return max(step_counts, default=1)
+
     def _load_bars(self, symbol: str) -> pd.DataFrame:
         cached = self._bars_cache.get(symbol)
         if cached is not None:
@@ -117,8 +128,7 @@ class CsvDataProvider:
             frame = self.missing_data_fetcher(symbol)
         except Exception as exc:
             message = (
-                f"No CSV found for {symbol} under {self.data_dir}; "
-                f"fallback fetch failed: {exc}"
+                f"No CSV found for {symbol} under {self.data_dir}; fallback fetch failed: {exc}"
             )
             self._missing_data_errors[symbol] = message
             raise ValueError(message) from exc
