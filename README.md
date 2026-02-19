@@ -70,6 +70,26 @@ this will run the prewritten scalping strategy continuously until you stop (ctrl
 - `cross_sectional_momentum` (long winners / short losers across symbols)
 - `arbitrage` (pairs-style statistical arbitrage)
 
+### Create a Strategy by Copying the Template
+
+Copy the template file, then paste/edit your logic in the new file:
+
+```bash
+cp src/algotrade/strategies/strategy_template.py src/algotrade/strategies/my_strategy.py
+```
+
+Then run it by the filename (without `.py`):
+
+```bash
+uv run algotrade --mode backtest --strategy my_strategy
+```
+
+Notes:
+- Paste any Lean-style class like `class MyAlgo(QCAlgorithm): ...` directly into the copied file.
+- Keep `from AlgorithmImports import *` at the top.
+- The loader uses the copied module filename (for example `my_strategy`) as the strategy id.
+- No `Strategy` subclass or `default_*_params()` function is required for template-based files.
+
 Scalping uses TA-Lib indicators when installed and falls back to pandas math when TA-Lib is unavailable.
 
 Backtest C runs replay bars in walk-forward order across cycles. Once the end of a symbol's dataset is reached, subsequent cycles use the final bar and PnL will plateau.

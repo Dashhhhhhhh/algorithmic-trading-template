@@ -16,6 +16,7 @@ from algotrade.config import Settings
 from algotrade.data.alpaca_market_data import AlpacaMarketDataProvider
 from algotrade.data.base import MarketDataProvider
 from algotrade.data.csv_data import CsvDataProvider
+from algotrade.data.yfinance_data import YFinanceDataProvider
 from algotrade.domain.events import TradeEvent
 from algotrade.domain.models import (
     OrderRequest,
@@ -29,8 +30,8 @@ from algotrade.logging.event_sink import JsonlEventSink, generate_plotly_report
 from algotrade.logging.logger import HumanLogger
 from algotrade.state.sqlite_store import SqliteStateStore
 from algotrade.state.store import OrderIntentRecord, StateStore
-from algotrade.strategies.base import Strategy
-from algotrade.strategies.registry import create_strategy
+from algotrade.strategy_core.base import Strategy
+from algotrade.strategy_core.registry import create_strategy
 
 
 class NoopStateStore:
@@ -1097,10 +1098,16 @@ def build_data_provider(settings: Settings, strategy: Strategy) -> MarketDataPro
     if source == "csv":
         walk_forward = settings.mode == "backtest"
         warmup_bars = strategy_warmup_bars(strategy)
+        missing_data_fetcher = None
+        if settings.mode == "backtest":
+            fallback_provider = YFinanceDataProvider(timeframe=settings.timeframe)
+            missing_data_fetcher = fallback_provider.get_bars
         return CsvDataProvider(
             data_dir=settings.historical_data_dir,
             walk_forward=walk_forward,
             warmup_bars=warmup_bars,
+            missing_data_fetcher=missing_data_fetcher,
+            persist_downloaded_bars=settings.mode == "backtest",
         )
     if not settings.alpaca_api_key or not settings.alpaca_secret_key:
         raise ValueError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required for Alpaca data")

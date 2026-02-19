@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from algotrade.domain.models import PortfolioSnapshot
-from algotrade.strategies.base import Strategy
+from algotrade.domain.models import PortfolioSnapshot, Position
+from algotrade.strategy_core.base import Strategy
 
 try:  # pragma: no cover - optional acceleration when TA-Lib is installed.
     import talib as _talib
@@ -66,28 +66,30 @@ class ScalpingStrategy(Strategy):
         bars_by_symbol: Mapping[str, pd.DataFrame],
         portfolio_snapshot: PortfolioSnapshot,
     ) -> dict[str, float]:
-        _ = portfolio_snapshot
         targets: dict[str, float] = {}
         for symbol, bars in sorted(bars_by_symbol.items()):
-            targets[symbol] = self._target_for_symbol(bars)
+            current_qty = float(
+                portfolio_snapshot.positions.get(symbol, Position(symbol=symbol, qty=0)).qty
+            )
+            targets[symbol] = self._target_for_symbol(bars, current_qty)
         return targets
 
-    def _target_for_symbol(self, bars: pd.DataFrame) -> float:
+    def _target_for_symbol(self, bars: pd.DataFrame, current_qty: float) -> float:
         if "close" not in bars.columns:
             raise ValueError("bars must include close column")
         close = pd.to_numeric(bars["close"], errors="coerce").dropna()
         min_rows = max(self.params.slow_ema_period, self.params.rsi_period) + 1
         if len(close) < min_rows:
-            return 0.0
+            return current_qty
 
         fast_ema, slow_ema, rsi = self._latest_indicators(close)
         if fast_ema is None or slow_ema is None or rsi is None:
-            return 0.0
+            return current_qty
         if fast_ema > slow_ema and rsi < self.params.rsi_overbought:
             return self.params.max_abs_qty
         if self.params.allow_short and fast_ema < slow_ema and rsi > self.params.rsi_oversold:
             return -self.params.max_abs_qty
-        return 0.0
+        return current_qty
 
     def _latest_indicators(
         self,

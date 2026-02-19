@@ -8,8 +8,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from algotrade.domain.models import PortfolioSnapshot
-from algotrade.strategies.base import Strategy
+from algotrade.domain.models import PortfolioSnapshot, Position
+from algotrade.strategy_core.base import Strategy
 
 
 @dataclass(frozen=True)
@@ -60,15 +60,23 @@ class ArbitrageStrategy(Strategy):
         bars_by_symbol: Mapping[str, pd.DataFrame],
         portfolio_snapshot: PortfolioSnapshot,
     ) -> dict[str, float]:
-        _ = portfolio_snapshot
-        targets = {symbol: 0.0 for symbol in sorted(bars_by_symbol)}
+        targets = {
+            symbol: float(
+                portfolio_snapshot.positions.get(symbol, Position(symbol=symbol, qty=0)).qty
+            )
+            for symbol in sorted(bars_by_symbol)
+        }
         pair = self._pick_pair(bars_by_symbol)
         if pair is None:
             return targets
 
         symbol_a, symbol_b = pair
         zscore = self._spread_zscore(bars_by_symbol[symbol_a], bars_by_symbol[symbol_b])
-        if zscore is None or abs(zscore) <= self.params.exit_zscore:
+        if zscore is None:
+            return targets
+        if abs(zscore) <= self.params.exit_zscore:
+            targets[symbol_a] = 0.0
+            targets[symbol_b] = 0.0
             return targets
         if not self.params.allow_short:
             return targets

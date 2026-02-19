@@ -5,30 +5,42 @@ from __future__ import annotations
 import importlib
 import inspect
 import pkgutil
+import sys
 from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 from types import ModuleType
 
 from algotrade.config import Settings
-from algotrade.strategies.base import Strategy
+from algotrade.strategy_core import algorithm_imports
+from algotrade.strategy_core.algorithm_imports import (
+    QCAlgorithm,
+    QCAlgorithmStrategyAdapter,
+)
+from algotrade.strategy_core.base import Strategy
 
 StrategyFactory = Callable[[Settings], Strategy]
 _SKIPPED_MODULES = {
     "__init__",
+    "algorithm_imports",
     "base",
     "registry",
     "strategy_template",
 }
 DEFAULT_STRATEGY_ID = "scalping"
+_STRATEGIES_PACKAGE_NAME = "algotrade.strategies"
 
 
 def _strategies_package_name() -> str:
-    return __name__.rsplit(".", 1)[0]
+    return _STRATEGIES_PACKAGE_NAME
 
 
 def _strategies_directory() -> Path:
-    return Path(__file__).resolve().parent
+    strategies_package = importlib.import_module(_strategies_package_name())
+    package_paths = list(getattr(strategies_package, "__path__", []))
+    if not package_paths:
+        raise ValueError(f"Unable to resolve strategies package path: {_strategies_package_name()}")
+    return Path(package_paths[0])
 
 
 def _iter_strategy_module_names() -> list[str]:
@@ -43,6 +55,18 @@ def _iter_strategy_module_names() -> list[str]:
 
 def _normalize_strategy_id(value: str) -> str:
     return value.strip().lower().replace("-", "_")
+
+
+def _resolved_strategy_id(module_name: str, candidate: type[Strategy]) -> str | None:
+    raw = getattr(candidate, "strategy_id", None)
+    if isinstance(raw, str):
+        normalized = _normalize_strategy_id(raw)
+        if normalized and normalized not in {"replace_me", "template"}:
+            return normalized
+    normalized_module_name = _normalize_strategy_id(module_name)
+    if not normalized_module_name:
+        return None
+    return normalized_module_name
 
 
 def _default_params_for(
@@ -65,10 +89,17 @@ def _default_params_for(
     return None
 
 
+def _ensure_algorithm_imports_alias() -> None:
+    if "AlgorithmImports" in sys.modules:
+        return
+    sys.modules["AlgorithmImports"] = algorithm_imports
+
+
 def _build_strategy(
     strategy_type: type[Strategy],
     module: ModuleType,
     settings: Settings,
+    strategy_id: str,
 ) -> Strategy:
     signature = inspect.signature(strategy_type)
     kwargs: dict[str, object] = {}
@@ -88,10 +119,10 @@ def _build_strategy(
         if parameter.name == "params":
             if parameter.default is not inspect.Signature.empty:
                 continue
-            params_object = _default_params_for(module, strategy_type.strategy_id)
+            params_object = _default_params_for(module, strategy_id)
             if params_object is None:
                 raise ValueError(
-                    f"Strategy '{strategy_type.strategy_id}' requires params but no "
+                    f"Strategy '{strategy_id}' requires params but no "
                     "default_*_params() function was found."
                 )
             if parameter.kind == inspect.Parameter.POSITIONAL_ONLY:
@@ -102,29 +133,50 @@ def _build_strategy(
 
         if parameter.default is inspect.Signature.empty:
             raise ValueError(
-                f"Strategy '{strategy_type.strategy_id}' has unsupported required "
+                f"Strategy '{strategy_id}' has unsupported required "
                 f"constructor parameter '{parameter.name}'."
             )
 
     return strategy_type(*args, **kwargs)
 
 
-def _strategy_types_in_module(module: ModuleType) -> list[type[Strategy]]:
-    discovered: list[type[Strategy]] = []
+def _strategy_types_in_module(module: ModuleType) -> list[tuple[type[Strategy], str]]:
+    discovered: list[tuple[type[Strategy], str]] = []
+    module_name = module.__name__.rsplit(".", 1)[-1]
     for _, candidate in inspect.getmembers(module, inspect.isclass):
         if candidate is Strategy or not issubclass(candidate, Strategy):
             continue
         if candidate.__module__ != module.__name__:
             continue
-        strategy_id = getattr(candidate, "strategy_id", None)
-        if not isinstance(strategy_id, str) or not strategy_id.strip():
+        strategy_id = _resolved_strategy_id(module_name, candidate)
+        if strategy_id is None:
+            continue
+        discovered.append((candidate, strategy_id))
+    return discovered
+
+
+def _qc_algorithm_type_in_module(module: ModuleType) -> type[QCAlgorithm] | None:
+    discovered: list[type[QCAlgorithm]] = []
+    for _, candidate in inspect.getmembers(module, inspect.isclass):
+        if candidate is QCAlgorithm or not issubclass(candidate, QCAlgorithm):
+            continue
+        if candidate.__module__ != module.__name__:
             continue
         discovered.append(candidate)
-    return discovered
+    if not discovered:
+        return None
+    if len(discovered) == 1:
+        return discovered[0]
+    names = ", ".join(sorted(item.__name__ for item in discovered))
+    raise ValueError(
+        f"Module '{module.__name__}' has multiple QCAlgorithm classes ({names}). "
+        "Keep one per module for auto-registration."
+    )
 
 
 @lru_cache(maxsize=1)
 def _discover_registry() -> tuple[dict[str, StrategyFactory], dict[str, str]]:
+    _ensure_algorithm_imports_alias()
     package_name = _strategies_package_name()
     registry: dict[str, StrategyFactory] = {}
     load_errors: dict[str, str] = {}
@@ -137,8 +189,8 @@ def _discover_registry() -> tuple[dict[str, StrategyFactory], dict[str, str]]:
             load_errors[module_name] = f"{type(exc).__name__}: {exc}"
             continue
 
-        for strategy_type in _strategy_types_in_module(module):
-            strategy_id = _normalize_strategy_id(strategy_type.strategy_id)
+        discovered_strategy_types = _strategy_types_in_module(module)
+        for strategy_type, strategy_id in discovered_strategy_types:
             if strategy_id in registry:
                 raise ValueError(f"Duplicate strategy id discovered: '{strategy_id}'")
 
@@ -146,10 +198,39 @@ def _discover_registry() -> tuple[dict[str, StrategyFactory], dict[str, str]]:
                 settings: Settings,
                 strategy_cls: type[Strategy] = strategy_type,
                 strategy_module: ModuleType = module,
+                resolved_id: str = strategy_id,
             ) -> Strategy:
-                return _build_strategy(strategy_cls, strategy_module, settings)
+                return _build_strategy(strategy_cls, strategy_module, settings, resolved_id)
 
             registry[strategy_id] = factory
+        if discovered_strategy_types:
+            continue
+
+        module_strategy_id = _normalize_strategy_id(module_name)
+        if not module_strategy_id:
+            continue
+        try:
+            qc_algorithm_type = _qc_algorithm_type_in_module(module)
+        except Exception as exc:  # pragma: no cover - defensive path
+            load_errors[module_name] = f"{type(exc).__name__}: {exc}"
+            continue
+        if qc_algorithm_type is None:
+            continue
+        if module_strategy_id in registry:
+            raise ValueError(f"Duplicate strategy id discovered: '{module_strategy_id}'")
+
+        def qc_factory(
+            settings: Settings,
+            algorithm_type: type[QCAlgorithm] = qc_algorithm_type,
+            strategy_id: str = module_strategy_id,
+        ) -> Strategy:
+            _ = settings
+            return QCAlgorithmStrategyAdapter(
+                algorithm_type=algorithm_type,
+                strategy_id=strategy_id,
+            )
+
+        registry[module_strategy_id] = qc_factory
 
     return registry, load_errors
 

@@ -7,7 +7,7 @@ import sys
 
 from algotrade.config import Settings, parse_symbols
 from algotrade.runtime import liquidate, run, show_portfolio
-from algotrade.strategies.registry import available_strategy_ids, default_strategy_id
+from algotrade.strategy_core.registry import available_strategy_ids, default_strategy_id
 
 
 def build_parser() -> argparse.ArgumentParser:

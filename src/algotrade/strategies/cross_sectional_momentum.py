@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from algotrade.domain.models import PortfolioSnapshot
-from algotrade.strategies.base import Strategy
+from algotrade.strategy_core.base import Strategy
 
 
 @dataclass(frozen=True)

@@ -1,36 +1,35 @@
-"""Template strategy implementation for quick copy-and-edit."""
+"""Copy-and-edit template for pasted QCAlgorithm strategies.
 
-from __future__ import annotations
+How to use:
+1. Copy this file to a new module in ``src/algotrade/strategies/``.
+2. Paste your strategy class in Lean format (``class X(QCAlgorithm)``).
+3. Run with ``--strategy <new_module_name>``.
 
-from collections.abc import Mapping
-from dataclasses import dataclass
+The registry will auto-wrap the QCAlgorithm class; no Strategy subclass is required.
+"""
+# ruff: noqa: F403,F405,I001
 
-import pandas as pd
-
-from algotrade.domain.models import PortfolioSnapshot
-from algotrade.strategies.base import Strategy
-
-
-@dataclass(frozen=True)
-class TemplateParams:
-    """Example parameter dataclass for custom strategies."""
-
-    target_qty: float = 1.0
+# region imports
+from AlgorithmImports import *
+# endregion
 
 
-class TemplateStrategy(Strategy):
-    """Minimal strategy skeleton implementing the target contract."""
+class TemplateAlgorithm(QCAlgorithm):
+    """Replace this class with your pasted QCAlgorithm strategy."""
 
-    strategy_id = "replace_me"
+    def initialize(self):
+        self.set_start_date(self.end_date - timedelta(days=365))
+        self.set_cash(100_000)
+        self.settings.automatic_indicator_warm_up = True
+        self._equity = self.add_equity("SPY", Resolution.DAILY)
+        self._can_short = False
 
-    def __init__(self, params: TemplateParams) -> None:
-        self.params = params
+    def on_data(self, data):
+        if not data.bars:
+            return
 
-    def decide_targets(
-        self,
-        bars_by_symbol: Mapping[str, pd.DataFrame],
-        portfolio_snapshot: PortfolioSnapshot,
-    ) -> dict[str, float]:
-        _ = bars_by_symbol
-        _ = portfolio_snapshot
-        return {}
+        # Paste your own rule logic here.
+        if self._equity.price > 0 and not self._equity.holdings.is_long:
+            self.set_holdings(self._equity, 1)
+        elif self._equity.holdings.is_long:
+            self.set_holdings(self._equity, 0)
