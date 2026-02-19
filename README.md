@@ -14,7 +14,7 @@ Algorithmic trading CLI with backtest and live execution, pluggable strategies, 
 1. create a folder anywhere on your computer, name it anything.
 2. open terminal and type ```cd "path/to/folder/here"``` and hit enter
 3. copy ```git clone https://github.com/Dashhhhhhhh/algorithmic-trading-template.git``` into console 
-4. type ```ls```, to list files in the directory, and type c
+4. type ```cd algorithmic-trading-template```, to enter into the cloned git directory
 
 1. Install dependencies:
 
@@ -25,10 +25,14 @@ uv sync --dev
 2. Create your local env file:
 
 ```bash
-cp .env.example .env
+cp .env.example .env 
 ```
+if that doesnt work just make a file named .env, and copy contents of .env.example into there
 
-3. For live mode, set Alpaca credentials in `.env`:
+open a text editor (i prefer vscode https://code.visualstudio.com/download)
+
+
+3. set Alpaca credentials in `.env`:
 
 ```bash
 ALPACA_API_KEY=your_key
@@ -36,7 +40,7 @@ ALPACA_SECRET_KEY=your_secret
 ALPACA_BASE_URL=https://paper-api.alpaca.markets
 ```
 
-4. Verify CLI wiring:
+4. Verify Command Line Interface (CLI):
 
 ```bash
 uv run algotrade --help
@@ -56,25 +60,22 @@ Use `--cycles N` (or `CYCLES=N`) to force a finite run in either mode.
 
 ## Quick Start
 
-### Backtest (single cycle default)
+### live trading is continuous unless specified otherwise
 
 ```bash
-uv run algotrade --mode backtest --strategy sma_crossover
+uv run algotrade --mode live --strategy scalping
 ```
+this will run the prewritten scalping strategy continuously until you stop (ctrl-c)
 
-Backtest CSV runs replay bars in walk-forward order across cycles. Once the end of a symbol's dataset is reached, subsequent cycles use the final bar and PnL will plateau.
 
-### Backtest (fixed cycle count)
+Backtest C runs replay bars in walk-forward order across cycles. Once the end of a symbol's dataset is reached, subsequent cycles use the final bar and PnL will plateau.
+
+### Backtest (runs on preset historical data typically in a .csv/excellike format) (fixed cycle count)
 
 ```bash
 uv run algotrade --mode backtest --strategy momentum --cycles 5
 ```
 
-### Live (continuous default)
-
-```bash
-uv run algotrade --mode live --strategy momentum --symbols SPY
-```
 
 ### Live (finite cycle count)
 
@@ -102,6 +103,8 @@ cash value/cost details (market value, cost basis, unrealized P/L).
 Settings load from `.env` and can be overridden by CLI flags.
 
 ### Asset Universe
+
+basically what assets are being traded
 
 ```bash
 ASSET_UNIVERSE=stocks    # stocks | crypto | all
@@ -160,17 +163,6 @@ Supported options:
 - `--liquidate`
 - `--portfolio`
 
-## Strategies
-
-- `sma_crossover`
-- `momentum`
-- `scalping` (EMA trend + short-horizon momentum confirmation)
-
-Strategy-specific parameters live in each strategy module under
-`/Users/dashdunmire/Documents/algotrade/boilerplate/src/algotrade/strategies/`.
-Edit the module-level default helpers there:
-`default_sma_crossover_params()`, `default_momentum_params()`, `default_scalping_params()`.
-
 ## Output
 
 Each run writes artifacts to `runs/<run_id>/`:
@@ -178,10 +170,4 @@ Each run writes artifacts to `runs/<run_id>/`:
 - `events.jsonl` with `run_started`, `decision`, `order_submit`, `order_update`, `cycle_summary`, `error`
 - `report.html` Plotly summary
 
-## Development
 
-```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run pytest -q
-```

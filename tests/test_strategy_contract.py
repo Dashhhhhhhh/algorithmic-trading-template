@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from algotrade.domain.models import PortfolioSnapshot, Position
+from algotrade.strategies.hourly_zscore_overlay import (
+    HourlyZScoreOverlayParams,
+    HourlyZScoreOverlayStrategy,
+    default_hourly_zscore_overlay_params,
+)
 from algotrade.strategies.momentum import MomentumParams, MomentumStrategy
 from algotrade.strategies.scalping import ScalpingParams, ScalpingStrategy
 from algotrade.strategies.sma_crossover import SmaCrossoverParams, SmaCrossoverStrategy
@@ -90,3 +96,45 @@ def test_scalping_returns_flat_when_signal_is_weak() -> None:
     targets = strategy.decide_targets({"SPY": bars}, _snapshot())
 
     assert targets == {"SPY": 0}
+
+
+def test_hourly_zscore_overlay_fades_extreme_returns() -> None:
+    strategy = HourlyZScoreOverlayStrategy(
+        HourlyZScoreOverlayParams(
+            lookback_bars=4,
+            z_score_threshold=1.0,
+            max_abs_qty=2,
+            require_stationarity=False,
+            allow_short=True,
+        )
+    )
+    upside_extreme = pd.DataFrame({"close": [100.0, 100.1, 100.2, 100.3, 110.33]})
+    downside_extreme = pd.DataFrame({"close": [100.0, 99.9, 99.8, 99.7, 89.73]})
+
+    short_targets = strategy.decide_targets({"SPY": upside_extreme}, _snapshot())
+    long_targets = strategy.decide_targets({"SPY": downside_extreme}, _snapshot())
+
+    assert short_targets["SPY"] == pytest.approx(-1.5, rel=1e-6)
+    assert long_targets["SPY"] == pytest.approx(1.5, rel=1e-6)
+
+
+def test_hourly_zscore_overlay_respects_allow_short() -> None:
+    strategy = HourlyZScoreOverlayStrategy(
+        HourlyZScoreOverlayParams(
+            lookback_bars=4,
+            z_score_threshold=1.0,
+            max_abs_qty=2,
+            require_stationarity=False,
+            allow_short=False,
+        )
+    )
+    upside_extreme = pd.DataFrame({"close": [100.0, 100.1, 100.2, 100.3, 110.33]})
+
+    targets = strategy.decide_targets({"SPY": upside_extreme}, _snapshot())
+
+    assert targets == {"SPY": 0}
+
+
+def test_hourly_zscore_overlay_defaults_do_not_require_stationarity() -> None:
+    params = default_hourly_zscore_overlay_params()
+    assert params.require_stationarity is False

@@ -95,6 +95,14 @@ def test_cli_accepts_scalping_strategy() -> None:
     assert settings.strategy == "scalping"
 
 
+def test_cli_accepts_hourly_zscore_overlay_strategy() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--mode", "backtest", "--strategy", "hourly_zscore_overlay"])
+    settings = apply_cli_overrides(Settings(), args)
+
+    assert settings.strategy == "hourly_zscore_overlay"
+
+
 def test_cli_accepts_liquidate_flag() -> None:
     parser = build_parser()
     args = parser.parse_args(["--liquidate"])
