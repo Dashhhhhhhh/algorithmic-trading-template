@@ -53,14 +53,20 @@ class HumanLogger:
         normalized_side = side.strip().lower()
         buy_amount = qty if normalized_side == "buy" else 0.0
         sell_amount = qty if normalized_side == "sell" else 0.0
-        parts = [
-            f"submit | {symbol} | buy_amount {self._format_qty(buy_amount)} "
-            f"| sell_amount {self._format_qty(sell_amount)}"
-        ]
+        buy_amount_text = self._format_qty(buy_amount)
+        sell_amount_text = self._format_qty(sell_amount)
+        reference_price: float | None = None
         if details:
             reference_price = self._as_float(details.get("reference_price"))
-            if reference_price is not None:
-                parts.append(f"ref ${reference_price:,.3f}")
+        if reference_price is not None:
+            buy_amount_text = f"{buy_amount_text} (${buy_amount * reference_price:,.2f})"
+            sell_amount_text = f"{sell_amount_text} (${sell_amount * reference_price:,.2f})"
+        parts = [
+            f"submit | {symbol} | buy_amount {buy_amount_text} "
+            f"| sell_amount {sell_amount_text}"
+        ]
+        if reference_price is not None:
+            parts.append(f"ref ${reference_price:,.3f}")
         self._logger.info(" | ".join(parts))
 
     def order_update(
@@ -78,8 +84,11 @@ class HumanLogger:
         parts = [f"update | {self._human_status(status)}"]
         if details:
             filled_price = self._as_float(details.get("filled_avg_price"))
+            filled_notional = self._as_float(details.get("filled_notional"))
             if filled_price is not None:
                 parts.append(f"fill ${filled_price:,.3f}")
+            if filled_notional is not None:
+                parts.append(f"fill_usd ${filled_notional:,.2f}")
             event_time = (
                 details.get("filled_at")
                 or details.get("updated_at")

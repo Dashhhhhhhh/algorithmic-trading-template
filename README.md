@@ -4,12 +4,17 @@ Algorithmic trading CLI with backtest and live execution, pluggable strategies, 
 
 ## Installation
 
-### Prerequisites
+### Prerequisites (install these before installing the repository)
 
 - Python `3.11+`
 - [`uv`](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer)
 
 ### Setup
+
+1. create a folder anywhere on your computer, name it anything.
+2. open terminal and type ```cd "path/to/folder/here"``` and hit enter
+3. copy ```git clone https://github.com/Dashhhhhhhh/algorithmic-trading-template.git``` into console 
+4. type ```ls```, to list files in the directory, and type c
 
 1. Install dependencies:
 
