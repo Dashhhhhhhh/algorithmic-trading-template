@@ -1,140 +1,135 @@
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
-from algotrade.domain.models import PortfolioSnapshot, Position
-from algotrade.strategies.hourly_zscore_overlay import (
-    HourlyZScoreOverlayParams,
-    HourlyZScoreOverlayStrategy,
-    default_hourly_zscore_overlay_params,
+from algotrade.domain.models import PortfolioSnapshot
+from algotrade.strategies.arbitrage import ArbitrageParams, ArbitrageStrategy
+from algotrade.strategies.cross_sectional_momentum import (
+    CrossSectionalMomentumParams,
+    CrossSectionalMomentumStrategy,
 )
-from algotrade.strategies.momentum import MomentumParams, MomentumStrategy
 from algotrade.strategies.scalping import ScalpingParams, ScalpingStrategy
-from algotrade.strategies.sma_crossover import SmaCrossoverParams, SmaCrossoverStrategy
 
 
 def _snapshot() -> PortfolioSnapshot:
     return PortfolioSnapshot(cash=1000.0, equity=1000.0, buying_power=1000.0, positions={})
 
 
-def _snapshot_with_position(symbol: str, qty: float) -> PortfolioSnapshot:
-    return PortfolioSnapshot(
-        cash=1000.0,
-        equity=1000.0,
-        buying_power=1000.0,
-        positions={symbol: Position(symbol=symbol, qty=qty)},
-    )
-
-
-def test_sma_crossover_returns_deterministic_targets() -> None:
-    strategy = SmaCrossoverStrategy(SmaCrossoverParams(short_window=2, long_window=3, target_qty=1))
-    uptrend = pd.DataFrame({"close": [1.0, 2.0, 3.0, 4.0]})
-    downtrend = pd.DataFrame({"close": [4.0, 3.0, 2.0, 1.0]})
-
-    up_targets = strategy.decide_targets({"SPY": uptrend}, _snapshot())
-    down_targets = strategy.decide_targets({"SPY": downtrend}, _snapshot())
-
-    assert up_targets == {"SPY": 1}
-    assert down_targets == {"SPY": -1}
-
-
-def test_momentum_returns_deterministic_sized_targets() -> None:
-    strategy = MomentumStrategy(MomentumParams(lookback_bars=3, threshold=0.01, max_abs_qty=2))
-    bullish = pd.DataFrame({"close": [100.0, 101.0, 102.0, 104.0, 106.0]})
-    bearish = pd.DataFrame({"close": [106.0, 104.0, 103.0, 102.0, 100.0]})
-
-    bullish_targets = strategy.decide_targets({"SPY": bullish}, _snapshot())
-    bearish_targets = strategy.decide_targets({"SPY": bearish}, _snapshot())
-
-    assert bullish_targets == {"SPY": 2}
-    assert bearish_targets == {"SPY": -2}
-
-
-def test_scalping_returns_signal_based_target_when_move_exceeds_threshold() -> None:
+def test_scalping_returns_long_when_fast_ema_is_above_slow_and_rsi_is_not_overbought() -> None:
     strategy = ScalpingStrategy(
         ScalpingParams(
-            lookback_bars=2,
-            threshold=0.0005,
+            fast_ema_period=2,
+            slow_ema_period=4,
+            rsi_period=3,
+            rsi_overbought=80,
+            rsi_oversold=20,
             max_abs_qty=2,
             allow_short=True,
         )
     )
-    bullish = pd.DataFrame({"close": [100.0, 100.2, 100.4, 100.7, 100.9, 101.2, 101.4, 101.7]})
-    bearish = pd.DataFrame({"close": [101.7, 101.4, 101.2, 100.9, 100.7, 100.4, 100.2, 100.0]})
-
-    bullish_targets = strategy.decide_targets({"SPY": bullish}, _snapshot())
-    bearish_targets = strategy.decide_targets({"SPY": bearish}, _snapshot())
-
-    assert bullish_targets == {"SPY": 2}
-    assert bearish_targets == {"SPY": -2}
-
-    exit_bullish_targets = strategy.decide_targets(
-        {"SPY": bullish},
-        _snapshot_with_position("SPY", 2),
-    )
-    exit_bearish_targets = strategy.decide_targets(
-        {"SPY": bearish},
-        _snapshot_with_position("SPY", -2),
-    )
-
-    assert exit_bullish_targets == {"SPY": 0}
-    assert exit_bearish_targets == {"SPY": 0}
-
-
-def test_scalping_returns_flat_when_signal_is_weak() -> None:
-    bars = pd.DataFrame({"close": [100.0, 100.02, 100.01, 100.03, 100.02, 100.03, 100.02, 100.03]})
-    strategy = ScalpingStrategy(
-        ScalpingParams(
-            lookback_bars=2,
-            threshold=0.002,
-            max_abs_qty=1,
-            allow_short=False,
-        )
-    )
+    bars = pd.DataFrame({"close": [100.0, 100.8, 100.6, 101.1, 100.7, 101.4]})
 
     targets = strategy.decide_targets({"SPY": bars}, _snapshot())
 
-    assert targets == {"SPY": 0}
+    assert targets == {"SPY": 2}
 
 
-def test_hourly_zscore_overlay_fades_extreme_returns() -> None:
-    strategy = HourlyZScoreOverlayStrategy(
-        HourlyZScoreOverlayParams(
-            lookback_bars=4,
-            z_score_threshold=1.0,
+def test_scalping_returns_short_when_fast_ema_is_below_slow_and_rsi_is_not_oversold() -> None:
+    strategy = ScalpingStrategy(
+        ScalpingParams(
+            fast_ema_period=2,
+            slow_ema_period=4,
+            rsi_period=3,
+            rsi_overbought=80,
+            rsi_oversold=10,
             max_abs_qty=2,
-            require_stationarity=False,
             allow_short=True,
         )
     )
-    upside_extreme = pd.DataFrame({"close": [100.0, 100.1, 100.2, 100.3, 110.33]})
-    downside_extreme = pd.DataFrame({"close": [100.0, 99.9, 99.8, 99.7, 89.73]})
+    bars = pd.DataFrame({"close": [101.8, 101.4, 101.1, 100.6, 100.9, 100.3]})
 
-    short_targets = strategy.decide_targets({"SPY": upside_extreme}, _snapshot())
-    long_targets = strategy.decide_targets({"SPY": downside_extreme}, _snapshot())
+    targets = strategy.decide_targets({"SPY": bars}, _snapshot())
 
-    assert short_targets["SPY"] == pytest.approx(-1.5, rel=1e-6)
-    assert long_targets["SPY"] == pytest.approx(1.5, rel=1e-6)
+    assert targets == {"SPY": -2}
 
 
-def test_hourly_zscore_overlay_respects_allow_short() -> None:
-    strategy = HourlyZScoreOverlayStrategy(
-        HourlyZScoreOverlayParams(
-            lookback_bars=4,
-            z_score_threshold=1.0,
-            max_abs_qty=2,
-            require_stationarity=False,
+def test_cross_sectional_momentum_ranks_winners_and_losers() -> None:
+    strategy = CrossSectionalMomentumStrategy(
+        CrossSectionalMomentumParams(
+            lookback_bars=2,
+            top_k=1,
+            max_abs_qty=1.5,
+            allow_short=True,
+        )
+    )
+    bars = {
+        "AAA": pd.DataFrame({"close": [100.0, 102.0, 104.0]}),
+        "BBB": pd.DataFrame({"close": [100.0, 101.0, 102.0]}),
+        "CCC": pd.DataFrame({"close": [100.0, 99.0, 98.0]}),
+    }
+
+    targets = strategy.decide_targets(bars, _snapshot())
+
+    assert targets == {"AAA": 1.5, "BBB": 0.0, "CCC": -1.5}
+
+
+def test_cross_sectional_momentum_respects_allow_short() -> None:
+    strategy = CrossSectionalMomentumStrategy(
+        CrossSectionalMomentumParams(
+            lookback_bars=2,
+            top_k=1,
+            max_abs_qty=1.5,
             allow_short=False,
         )
     )
-    upside_extreme = pd.DataFrame({"close": [100.0, 100.1, 100.2, 100.3, 110.33]})
+    bars = {
+        "AAA": pd.DataFrame({"close": [100.0, 102.0, 104.0]}),
+        "BBB": pd.DataFrame({"close": [100.0, 99.0, 98.0]}),
+    }
 
-    targets = strategy.decide_targets({"SPY": upside_extreme}, _snapshot())
+    targets = strategy.decide_targets(bars, _snapshot())
 
-    assert targets == {"SPY": 0}
+    assert targets == {"AAA": 1.5, "BBB": 0.0}
 
 
-def test_hourly_zscore_overlay_defaults_do_not_require_stationarity() -> None:
-    params = default_hourly_zscore_overlay_params()
-    assert params.require_stationarity is False
+def test_arbitrage_shorts_rich_leg_and_longs_cheap_leg_when_spread_is_wide() -> None:
+    strategy = ArbitrageStrategy(
+        ArbitrageParams(
+            lookback_bars=5,
+            entry_zscore=1.5,
+            exit_zscore=0.25,
+            max_abs_qty=2,
+            allow_short=True,
+        )
+    )
+    bars = {
+        "AAA": pd.DataFrame({"close": [100.0, 100.2, 100.1, 100.3, 100.1, 120.0]}),
+        "BBB": pd.DataFrame({"close": [100.0, 100.1, 100.2, 100.3, 100.1, 100.0]}),
+        "CCC": pd.DataFrame({"close": [50.0, 50.1, 50.2, 50.3, 50.1, 50.0]}),
+    }
+
+    targets = strategy.decide_targets(bars, _snapshot())
+
+    assert targets["AAA"] == -2
+    assert targets["BBB"] == 2
+    assert targets["CCC"] == 0.0
+
+
+def test_arbitrage_stays_flat_when_shorting_is_disabled() -> None:
+    strategy = ArbitrageStrategy(
+        ArbitrageParams(
+            lookback_bars=5,
+            entry_zscore=1.5,
+            exit_zscore=0.25,
+            max_abs_qty=2,
+            allow_short=False,
+        )
+    )
+    bars = {
+        "AAA": pd.DataFrame({"close": [100.0, 100.2, 100.1, 100.3, 100.1, 120.0]}),
+        "BBB": pd.DataFrame({"close": [100.0, 100.1, 100.2, 100.3, 100.1, 100.0]}),
+    }
+
+    targets = strategy.decide_targets(bars, _snapshot())
+
+    assert targets == {"AAA": 0.0, "BBB": 0.0}

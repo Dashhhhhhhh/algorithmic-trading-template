@@ -1,7 +1,4 @@
 # algotrade
-
-Algorithmic trading CLI with backtest and live execution, pluggable strategies, risk gates, JSONL logs, and per-run Plotly reports.
-
 ## Installation
 
 ### Prerequisites (install these before installing the repository)
@@ -67,20 +64,27 @@ uv run algotrade --mode live --strategy scalping
 ```
 this will run the prewritten scalping strategy continuously until you stop (ctrl-c)
 
+### Available Strategies
+
+- `scalping` (EMA + RSI, textbook intraday trend filter)
+- `cross_sectional_momentum` (long winners / short losers across symbols)
+- `arbitrage` (pairs-style statistical arbitrage)
+
+Scalping uses TA-Lib indicators when installed and falls back to pandas math when TA-Lib is unavailable.
 
 Backtest C runs replay bars in walk-forward order across cycles. Once the end of a symbol's dataset is reached, subsequent cycles use the final bar and PnL will plateau.
 
 ### Backtest (runs on preset historical data typically in a .csv/excellike format) (fixed cycle count)
 
 ```bash
-uv run algotrade --mode backtest --strategy momentum --cycles 5
+uv run algotrade --mode backtest --strategy cross_sectional_momentum --symbols SPY,QQQ,AAPL --cycles 5
 ```
 
 
 ### Live (finite cycle count)
 
 ```bash
-uv run algotrade --mode live --strategy momentum --symbols SPY --cycles 3
+uv run algotrade --mode live --strategy arbitrage --symbols SPY,QQQ --cycles 3
 ```
 
 ### Liquidate (flatten all live positions and exit)
@@ -169,5 +173,3 @@ Each run writes artifacts to `runs/<run_id>/`:
 
 - `events.jsonl` with `run_started`, `decision`, `order_submit`, `order_update`, `cycle_summary`, `error`
 - `report.html` Plotly summary
-
-

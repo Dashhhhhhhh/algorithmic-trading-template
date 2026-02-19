@@ -20,7 +20,7 @@ _SKIPPED_MODULES = {
     "registry",
     "strategy_template",
 }
-DEFAULT_STRATEGY_ID = "sma_crossover"
+DEFAULT_STRATEGY_ID = "scalping"
 
 
 def _strategies_package_name() -> str:

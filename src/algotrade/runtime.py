@@ -435,10 +435,16 @@ def execute_cycle(
             details["target_signal"] = target_signal
             if strategy.strategy_id == "scalping":
                 params = getattr(strategy, "params", None)
-                threshold = getattr(params, "threshold", None)
+                fast_ema_period = getattr(params, "fast_ema_period", None)
+                slow_ema_period = getattr(params, "slow_ema_period", None)
+                rsi_period = getattr(params, "rsi_period", None)
                 allow_short = getattr(params, "allow_short", None)
-                if threshold is not None:
-                    details["scalping_threshold"] = float(threshold)
+                if fast_ema_period is not None:
+                    details["scalping_fast_ema_period"] = int(fast_ema_period)
+                if slow_ema_period is not None:
+                    details["scalping_slow_ema_period"] = int(slow_ema_period)
+                if rsi_period is not None:
+                    details["scalping_rsi_period"] = int(rsi_period)
                 if allow_short is not None:
                     details["scalping_allow_short"] = bool(allow_short)
             decision_details[symbol] = details
@@ -1109,13 +1115,12 @@ def build_data_provider(settings: Settings, strategy: Strategy) -> MarketDataPro
 def strategy_diagnostic_lookback_bars(strategy: Strategy) -> int:
     """Resolve lookback horizon from strategy params for decision diagnostics."""
     params = getattr(strategy, "params", None)
-    lookback = getattr(params, "lookback_bars", None)
-    if isinstance(lookback, (int, float)) and lookback > 0:
-        return int(lookback)
-    long_window = getattr(params, "long_window", None)
-    if isinstance(long_window, (int, float)) and long_window > 0:
-        return int(long_window)
-    return 1
+    candidates = [1]
+    for field in ("lookback_bars", "slow_ema_period", "rsi_period"):
+        value = getattr(params, field, None)
+        if isinstance(value, (int, float)) and value > 0:
+            candidates.append(int(value))
+    return max(candidates)
 
 
 def strategy_trade_size_bounds(strategy: Strategy | None) -> tuple[float, float] | None:
@@ -1170,7 +1175,7 @@ def strategy_warmup_bars(strategy: Strategy) -> int:
     """Resolve minimum historical bars needed to run the strategy."""
     params = getattr(strategy, "params", None)
     candidates = [2]
-    for field in ("long_window", "lookback_bars"):
+    for field in ("lookback_bars", "slow_ema_period", "rsi_period"):
         value = getattr(params, field, None)
         if isinstance(value, (int, float)) and value > 0:
             candidates.append(int(value) + 1)

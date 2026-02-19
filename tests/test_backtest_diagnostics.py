@@ -173,8 +173,11 @@ def test_resolve_target_quantities_uses_strategy_trade_size_percent_bounds() -> 
     )
     strategy = ScalpingStrategy(
         ScalpingParams(
-            lookback_bars=2,
-            threshold=0.0005,
+            fast_ema_period=5,
+            slow_ema_period=20,
+            rsi_period=14,
+            rsi_overbought=70.0,
+            rsi_oversold=30.0,
             max_abs_qty=2.0,
             min_trade_size_pct=0.05,
             max_trade_size_pct=0.10,

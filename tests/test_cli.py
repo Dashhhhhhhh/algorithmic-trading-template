@@ -13,7 +13,7 @@ def test_cli_overrides_produce_expected_settings() -> None:
             "--mode",
             "backtest",
             "--strategy",
-            "momentum",
+            "cross_sectional_momentum",
             "--symbols",
             "SPY,AAPL",
             "--cycles",
@@ -33,7 +33,7 @@ def test_cli_overrides_produce_expected_settings() -> None:
     settings = apply_cli_overrides(Settings(), args)
 
     assert settings.mode == "backtest"
-    assert settings.strategy == "momentum"
+    assert settings.strategy == "cross_sectional_momentum"
     assert settings.symbols == ["SPY", "AAPL"]
     assert settings.cycles == 3
     assert settings.cycle_limit() == 3
@@ -95,12 +95,20 @@ def test_cli_accepts_scalping_strategy() -> None:
     assert settings.strategy == "scalping"
 
 
-def test_cli_accepts_hourly_zscore_overlay_strategy() -> None:
+def test_cli_accepts_cross_sectional_momentum_strategy() -> None:
     parser = build_parser()
-    args = parser.parse_args(["--mode", "backtest", "--strategy", "hourly_zscore_overlay"])
+    args = parser.parse_args(["--mode", "backtest", "--strategy", "cross_sectional_momentum"])
     settings = apply_cli_overrides(Settings(), args)
 
-    assert settings.strategy == "hourly_zscore_overlay"
+    assert settings.strategy == "cross_sectional_momentum"
+
+
+def test_cli_accepts_arbitrage_strategy() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["--mode", "backtest", "--strategy", "arbitrage"])
+    settings = apply_cli_overrides(Settings(), args)
+
+    assert settings.strategy == "arbitrage"
 
 
 def test_cli_accepts_liquidate_flag() -> None:
