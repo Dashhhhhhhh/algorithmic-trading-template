@@ -323,6 +323,10 @@ class QCAlgorithm:
     def error(self, message: str) -> None:
         _ = message
 
+    def declared_symbols(self) -> list[str]:
+        """Return symbols explicitly added by the strategy."""
+        return sorted(self._securities.keys())
+
     def _add_security(self, ticker: str) -> Security:
         symbol = ticker.strip().upper()
         if not symbol:
@@ -380,7 +384,6 @@ class QCAlgorithm:
             if close.empty:
                 continue
             self._latest_prices[symbol] = float(close.iloc[-1])
-        self._targets = {}
         for indicator in self._indicators.values():
             indicator.update(self._bars_by_symbol)
 
@@ -451,6 +454,24 @@ class QCAlgorithmStrategyAdapter(Strategy):
         )
         self._call_on_data(Slice(bars_by_symbol))
         return self.algorithm._resolve_targets(bars_by_symbol, portfolio_snapshot)
+
+    def declared_symbols(self) -> list[str]:
+        """Expose algorithm-declared symbols for runtime symbol resolution."""
+        get_declared_symbols = getattr(self.algorithm, "declared_symbols", None)
+        if not callable(get_declared_symbols):
+            return []
+        symbols = get_declared_symbols()
+        if not isinstance(symbols, list):
+            return []
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for candidate in symbols:
+            symbol = str(candidate).strip().upper()
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            normalized.append(symbol)
+        return normalized
 
 
 def _coerce_float(value: Any, default: float | None = None) -> float | None:

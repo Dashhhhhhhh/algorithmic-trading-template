@@ -38,6 +38,18 @@ class DonchianChannelBreakoutAlgorithm(QCAlgorithm):
         self.plot("Custom", "Donchian Channel Low", self._dch.lower_band.previous.value)
 
 
+class HoldOnceAlgorithm(QCAlgorithm):
+    def initialize(self):
+        self._equity = self.add_equity("SPY", Resolution.DAILY)
+        self._did_set = False
+
+    def on_data(self, data):
+        if not data.bars or self._did_set:
+            return
+        self.set_holdings(self._equity, 1)
+        self._did_set = True
+
+
 def _snapshot(positions: dict[str, Position] | None = None) -> PortfolioSnapshot:
     return PortfolioSnapshot(
         cash=1000.0,
@@ -66,6 +78,15 @@ def test_pasted_qcalgorithm_longs_on_upper_breakout() -> None:
     assert targets["SPY"] == 1.0
 
 
+def test_pasted_qcalgorithm_exposes_declared_symbols() -> None:
+    adapter = QCAlgorithmStrategyAdapter(
+        algorithm_type=DonchianChannelBreakoutAlgorithm,
+        strategy_id="template",
+    )
+
+    assert adapter.declared_symbols() == ["SPY"]
+
+
 def test_pasted_qcalgorithm_flattens_when_shorting_disabled() -> None:
     adapter = QCAlgorithmStrategyAdapter(
         algorithm_type=DonchianChannelBreakoutAlgorithm,
@@ -84,3 +105,27 @@ def test_pasted_qcalgorithm_flattens_when_shorting_disabled() -> None:
     targets = adapter.decide_targets({"SPY": bars}, snapshot)
 
     assert targets["SPY"] == 0.0
+
+
+def test_pasted_qcalgorithm_persists_target_until_changed() -> None:
+    adapter = QCAlgorithmStrategyAdapter(
+        algorithm_type=HoldOnceAlgorithm,
+        strategy_id="hold_once",
+    )
+    bars = pd.DataFrame(
+        {
+            "open": [100.0, 101.0],
+            "high": [101.0, 102.0],
+            "low": [99.0, 100.0],
+            "close": [100.0, 101.0],
+        }
+    )
+
+    first_targets = adapter.decide_targets({"SPY": bars}, _snapshot())
+    second_targets = adapter.decide_targets(
+        {"SPY": bars},
+        _snapshot({"SPY": Position(symbol="SPY", qty=0.5)}),
+    )
+
+    assert first_targets["SPY"] == 1.0
+    assert second_targets["SPY"] == 1.0

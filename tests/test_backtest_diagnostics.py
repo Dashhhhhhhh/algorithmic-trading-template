@@ -14,6 +14,7 @@ from algotrade.runtime import (
     build_latest_prices,
     compute_equity_metrics,
     extract_receipt_price_details,
+    resolve_strategy_symbols,
     resolve_target_quantities,
     serialize_orders,
     serialize_portfolio,
@@ -200,3 +201,27 @@ def test_resolve_target_quantities_uses_strategy_trade_size_percent_bounds() -> 
 
     # 0.10% of $100,000 = $100 notional => 0.002 BTC at $50,000.
     assert targets == {"BTCUSD": 0.002}
+
+
+class _DeclaredSymbolStub:
+    def __init__(self, symbols: list[str]) -> None:
+        self._symbols = symbols
+
+    def declared_symbols(self) -> list[str]:
+        return self._symbols
+
+
+def test_resolve_strategy_symbols_prefers_declared_on_no_overlap() -> None:
+    strategy = _DeclaredSymbolStub(["XOM"])
+
+    symbols = resolve_strategy_symbols(["SPY"], strategy)
+
+    assert symbols == ["XOM"]
+
+
+def test_resolve_strategy_symbols_merges_when_overlap_exists() -> None:
+    strategy = _DeclaredSymbolStub(["SPY", "XOM"])
+
+    symbols = resolve_strategy_symbols(["SPY", "QQQ"], strategy)
+
+    assert symbols == ["SPY", "QQQ", "XOM"]

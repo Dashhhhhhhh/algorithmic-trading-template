@@ -51,10 +51,12 @@ def apply_risk_gates(
     orders: list[OrderRequest],
     portfolio_snapshot: PortfolioSnapshot,
     limits: RiskLimits,
+    non_shortable_symbols: set[str] | None = None,
 ) -> list[OrderRequest]:
     """Apply risk checks and return submit-safe orders."""
     return filter_orders_by_limits(
         orders=orders,
         portfolio_snapshot=portfolio_snapshot,
         limits=limits,
+        non_shortable_symbols=non_shortable_symbols,
     )

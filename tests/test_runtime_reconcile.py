@@ -92,3 +92,34 @@ def test_find_risk_blocked_orders_reports_short_disabled() -> None:
             "reason": "short_disabled",
         }
     ]
+
+
+def test_find_risk_blocked_orders_reports_asset_not_shortable() -> None:
+    raw_orders = [OrderRequest(symbol="ETHUSD", qty=1, side=OrderSide.SELL)]
+    safe_orders: list[OrderRequest] = []
+    portfolio = PortfolioSnapshot(
+        cash=1000.0,
+        equity=1000.0,
+        buying_power=1000.0,
+        positions={"ETHUSD": Position(symbol="ETHUSD", qty=0)},
+    )
+    limits = RiskLimits(max_abs_position_per_symbol=10, allow_short=True)
+
+    blocked = find_risk_blocked_orders(
+        raw_orders,
+        safe_orders,
+        portfolio,
+        limits,
+        non_shortable_symbols={"ETHUSD"},
+    )
+
+    assert blocked == [
+        {
+            "symbol": "ETHUSD",
+            "side": "sell",
+            "qty": 1,
+            "current_qty": 0,
+            "proposed_qty": -1,
+            "reason": "asset_not_shortable",
+        }
+    ]

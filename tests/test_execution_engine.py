@@ -51,6 +51,28 @@ def test_apply_risk_gates_blocks_short_when_disabled() -> None:
     assert safe == []
 
 
+def test_apply_risk_gates_blocks_non_shortable_symbols_even_when_short_enabled() -> None:
+    orders = compute_orders(
+        current_positions={"ETHUSD": Position(symbol="ETHUSD", qty=0)},
+        targets={"ETHUSD": -1},
+        default_order_type="market",
+    )
+    snapshot = PortfolioSnapshot(
+        cash=1000.0,
+        equity=1000.0,
+        buying_power=1000.0,
+        positions={"ETHUSD": Position(symbol="ETHUSD", qty=0)},
+    )
+    safe = apply_risk_gates(
+        orders=orders,
+        portfolio_snapshot=snapshot,
+        limits=RiskLimits(max_abs_position_per_symbol=10, allow_short=True),
+        non_shortable_symbols={"ETHUSD"},
+    )
+
+    assert safe == []
+
+
 def test_compute_orders_handles_fractional_deltas() -> None:
     orders = compute_orders(
         current_positions={"BTCUSD": Position(symbol="BTCUSD", qty=0.998)},

@@ -236,6 +236,9 @@ def liquidate(settings: Settings) -> int:
 def run(settings: Settings) -> int:
     """Run algorithmic trading in live or backtest mode."""
     strategy = create_strategy(settings.strategy, settings)
+    resolved_symbols = resolve_strategy_symbols(settings.symbols, strategy)
+    if resolved_symbols != settings.symbols:
+        settings = settings.with_overrides(symbols=resolved_symbols)
     data_provider = build_data_provider(settings, strategy)
     broker = build_broker(settings)
     state_store: StateStore = build_state_store(settings)
@@ -509,8 +512,20 @@ def execute_cycle(
         max_abs_position_per_symbol=settings.max_abs_position_per_symbol,
         allow_short=settings.allow_short,
     )
-    orders = apply_risk_gates(raw_orders, portfolio, risk_limits)
-    risk_blocked = find_risk_blocked_orders(raw_orders, orders, portfolio, risk_limits)
+    non_shortable_symbols = resolve_non_shortable_symbols(settings, raw_orders)
+    orders = apply_risk_gates(
+        raw_orders,
+        portfolio,
+        risk_limits,
+        non_shortable_symbols=non_shortable_symbols,
+    )
+    risk_blocked = find_risk_blocked_orders(
+        raw_orders,
+        orders,
+        portfolio,
+        risk_limits,
+        non_shortable_symbols=non_shortable_symbols,
+    )
 
     for blocked in risk_blocked:
         blocked_payload = {
@@ -971,13 +986,32 @@ def serialize_receipts(receipts: list[Any]) -> list[dict[str, Any]]:
     ]
 
 
+def resolve_non_shortable_symbols(settings: Settings, orders: list[OrderRequest]) -> set[str]:
+    """Identify symbols that should be treated as long-only in current runtime context."""
+    if settings.mode != "live":
+        return set()
+    if settings.effective_data_source() != "alpaca":
+        return set()
+
+    blocked_symbols: set[str] = set()
+    for order in orders:
+        symbol = str(order.symbol).strip().upper()
+        if not symbol:
+            continue
+        if AlpacaPaperBroker._is_crypto_symbol(symbol):
+            blocked_symbols.add(symbol)
+    return blocked_symbols
+
+
 def find_risk_blocked_orders(
     raw_orders: list[OrderRequest],
     safe_orders: list[OrderRequest],
     portfolio: Any,
     limits: RiskLimits,
+    non_shortable_symbols: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Compute which raw orders were removed by risk filters and why."""
+    blocked_short_symbols = {symbol.upper() for symbol in (non_shortable_symbols or set())}
     safe_counts = Counter(_order_signature(order) for order in safe_orders)
     blocked: list[dict[str, Any]] = []
 
@@ -993,7 +1027,10 @@ def find_risk_blocked_orders(
         ).qty
         signed_delta = order.qty if order.side is OrderSide.BUY else -order.qty
         proposed_qty = current_qty + signed_delta
-        if not limits.allow_short and proposed_qty < 0:
+        symbol_forbids_short = order.symbol.upper() in blocked_short_symbols
+        if symbol_forbids_short and proposed_qty < 0:
+            reason = "asset_not_shortable"
+        elif not limits.allow_short and proposed_qty < 0:
             reason = "short_disabled"
         elif abs(proposed_qty) > limits.max_abs_position_per_symbol:
             reason = "max_position_exceeded"
@@ -1222,6 +1259,41 @@ def strategy_signal_scale(strategy: Strategy | None) -> float:
         if isinstance(value, (int, float)) and float(value) > 0:
             return float(value)
     return 1.0
+
+
+def resolve_strategy_symbols(configured_symbols: list[str], strategy: Strategy | None) -> list[str]:
+    """Resolve runtime symbols by reconciling configured and strategy-declared symbols."""
+    configured = normalize_symbol_list(configured_symbols)
+    if strategy is None:
+        return configured
+
+    get_declared_symbols = getattr(strategy, "declared_symbols", None)
+    if not callable(get_declared_symbols):
+        return configured
+
+    declared = normalize_symbol_list(get_declared_symbols())
+    if not declared:
+        return configured
+
+    configured_set = set(configured)
+    if configured_set.intersection(declared):
+        return normalize_symbol_list([*configured, *declared])
+    return declared
+
+
+def normalize_symbol_list(symbols: list[str] | tuple[str, ...] | None) -> list[str]:
+    """Normalize symbols to uppercase and de-duplicate while preserving order."""
+    if symbols is None:
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_symbol in symbols:
+        symbol = str(raw_symbol).strip().upper()
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        normalized.append(symbol)
+    return normalized
 
 
 def _signal_strength(signal_value: float, signal_cap: float) -> float:
