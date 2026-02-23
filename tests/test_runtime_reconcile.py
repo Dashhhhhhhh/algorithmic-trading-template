@@ -123,3 +123,28 @@ def test_find_risk_blocked_orders_reports_asset_not_shortable() -> None:
             "reason": "asset_not_shortable",
         }
     ]
+
+
+def test_find_risk_blocked_orders_reports_fractional_short_unsupported() -> None:
+    raw_orders = [OrderRequest(symbol="SPY", qty=0.4, side=OrderSide.SELL)]
+    safe_orders: list[OrderRequest] = []
+    portfolio = PortfolioSnapshot(
+        cash=1000.0,
+        equity=1000.0,
+        buying_power=1000.0,
+        positions={"SPY": Position(symbol="SPY", qty=0.2)},
+    )
+    limits = RiskLimits(max_abs_position_per_symbol=10, allow_short=True)
+
+    blocked = find_risk_blocked_orders(raw_orders, safe_orders, portfolio, limits)
+
+    assert blocked == [
+        {
+            "symbol": "SPY",
+            "side": "sell",
+            "qty": 0.4,
+            "current_qty": 0.2,
+            "proposed_qty": -0.2,
+            "reason": "fractional_short_unsupported",
+        }
+    ]

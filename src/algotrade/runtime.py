@@ -1032,6 +1032,8 @@ def find_risk_blocked_orders(
             reason = "asset_not_shortable"
         elif not limits.allow_short and proposed_qty < 0:
             reason = "short_disabled"
+        elif proposed_qty < 0 and _is_fractional_position_qty(proposed_qty):
+            reason = "fractional_short_unsupported"
         elif abs(proposed_qty) > limits.max_abs_position_per_symbol:
             reason = "max_position_exceeded"
         else:
@@ -1060,6 +1062,11 @@ def _order_signature(order: OrderRequest) -> tuple[str, str, str, str, str]:
         order.order_type,
         order.time_in_force,
     )
+
+
+def _is_fractional_position_qty(value: float, epsilon: float = 1e-9) -> bool:
+    rounded = round(float(value))
+    return abs(float(value) - float(rounded)) > epsilon
 
 
 def build_bars_by_symbol(symbols: list[str], data_provider: MarketDataProvider) -> dict[str, Any]:

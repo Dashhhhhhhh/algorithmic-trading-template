@@ -24,8 +24,11 @@ def filter_orders_by_limits(
         signed_delta = order.qty if order.side is OrderSide.BUY else -order.qty
         proposed_qty = current_qty + signed_delta
         symbol_forbids_short = order.symbol.upper() in blocked_short_symbols
-        if proposed_qty < 0 and (not limits.allow_short or symbol_forbids_short):
-            continue
+        if proposed_qty < 0:
+            if not limits.allow_short or symbol_forbids_short:
+                continue
+            if _is_fractional(proposed_qty):
+                continue
         if abs(proposed_qty) > limits.max_abs_position_per_symbol:
             continue
         safe_orders.append(order)
@@ -41,3 +44,8 @@ def _normalize_symbols(symbols: Iterable[str] | None) -> set[str]:
         if value:
             normalized.add(value)
     return normalized
+
+
+def _is_fractional(value: float, epsilon: float = 1e-9) -> bool:
+    rounded = round(float(value))
+    return abs(float(value) - float(rounded)) > epsilon
