@@ -143,7 +143,7 @@ class AlpacaMarketDataProvider:
                 "t": "time",
             }
         )
-        frame.index = pd.to_datetime(frame["time"], utc=False)
+        frame.index = pd.to_datetime(frame["time"], utc=True)
         frame = frame.sort_index()
         frame = frame[["open", "high", "low", "close", "volume"]]
         return frame.apply(pd.to_numeric, errors="coerce").dropna()

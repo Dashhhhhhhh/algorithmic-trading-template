@@ -58,15 +58,18 @@ class YFinanceDataProvider:
         if open_column is None or high_column is None or low_column is None or close_column is None:
             raise ValueError(f"yfinance payload missing OHLC columns for {symbol} ({ticker})")
 
-        normalized = pd.DataFrame(index=pd.to_datetime(frame.index, utc=False))
-        normalized["open"] = pd.to_numeric(frame[open_column], errors="coerce")
-        normalized["high"] = pd.to_numeric(frame[high_column], errors="coerce")
-        normalized["low"] = pd.to_numeric(frame[low_column], errors="coerce")
-        normalized["close"] = pd.to_numeric(frame[close_column], errors="coerce")
+        normalized = pd.DataFrame(index=pd.to_datetime(frame.index, utc=True))
+        # Use positional assignment so timezone-normalized index does not misalign source series.
+        normalized["open"] = pd.to_numeric(frame[open_column], errors="coerce").to_numpy()
+        normalized["high"] = pd.to_numeric(frame[high_column], errors="coerce").to_numpy()
+        normalized["low"] = pd.to_numeric(frame[low_column], errors="coerce").to_numpy()
+        normalized["close"] = pd.to_numeric(frame[close_column], errors="coerce").to_numpy()
         if volume_column is None:
             normalized["volume"] = 0.0
         else:
-            normalized["volume"] = pd.to_numeric(frame[volume_column], errors="coerce").fillna(0.0)
+            normalized["volume"] = (
+                pd.to_numeric(frame[volume_column], errors="coerce").fillna(0.0).to_numpy()
+            )
         normalized = normalized.sort_index()
         normalized = normalized.dropna(subset=["open", "high", "low", "close"])
         return normalized

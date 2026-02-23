@@ -79,6 +79,31 @@ def test_csv_provider_reports_walk_forward_total_steps(tmp_path: Path) -> None:
     assert steps == 3
 
 
+def test_csv_provider_normalizes_mixed_timezone_offsets_to_utc(tmp_path: Path) -> None:
+    path = tmp_path / "SPY.csv"
+    frame = pd.DataFrame(
+        {
+            "date": [
+                "2025-01-02T09:30:00-05:00",
+                "2025-07-02T09:30:00-04:00",
+            ],
+            "open": [100.0, 101.0],
+            "high": [101.0, 102.0],
+            "low": [99.0, 100.0],
+            "close": [100.5, 101.5],
+            "volume": [1000.0, 1100.0],
+        }
+    )
+    frame.to_csv(path, index=False)
+    provider = CsvDataProvider(data_dir=str(tmp_path))
+
+    bars = provider.get_bars("SPY")
+
+    assert len(bars) == 2
+    assert bars.index.tz is not None
+    assert str(bars.index.tz) == "UTC"
+
+
 def _fallback_bars() -> pd.DataFrame:
     return pd.DataFrame(
         {

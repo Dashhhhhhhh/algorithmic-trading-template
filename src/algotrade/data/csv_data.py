@@ -167,17 +167,17 @@ class CsvDataProvider:
         date_column = self._pick_date_column(lower_to_original)
         rename_map = self._build_ohlcv_rename_map(lower_to_original, symbol)
         normalized = frame.rename(columns=rename_map)
-        normalized.index = pd.to_datetime(normalized[date_column], utc=False)
+        normalized.index = pd.to_datetime(normalized[date_column], utc=True)
         return self._normalize_ohlcv(normalized, symbol)
 
     def _normalize_fallback(self, frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
         normalized = frame.copy()
         if isinstance(normalized.index, pd.DatetimeIndex):
-            normalized.index = pd.to_datetime(normalized.index, utc=False)
+            normalized.index = pd.to_datetime(normalized.index, utc=True)
         else:
             lower_to_original = {column.strip().lower(): column for column in normalized.columns}
             date_column = self._pick_date_column(lower_to_original)
-            normalized.index = pd.to_datetime(normalized[date_column], utc=False)
+            normalized.index = pd.to_datetime(normalized[date_column], utc=True)
         return self._normalize_ohlcv(normalized, symbol)
 
     def _normalize_ohlcv(self, frame: pd.DataFrame, symbol: str) -> pd.DataFrame:

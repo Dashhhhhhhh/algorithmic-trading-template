@@ -51,3 +51,33 @@ def test_yfinance_provider_normalizes_history(monkeypatch) -> None:
     assert list(bars.columns) == ["open", "high", "low", "close", "volume"]
     assert float(bars["volume"].iloc[-1]) == 0.0
     assert float(bars["close"].iloc[-1]) == 11.5
+
+
+def test_yfinance_provider_normalizes_mixed_timezone_offsets_to_utc(monkeypatch) -> None:
+    history = pd.DataFrame(
+        {
+            "Open": [10.0, 11.0],
+            "High": [11.0, 12.0],
+            "Low": [9.0, 10.0],
+            "Close": [10.5, 11.5],
+        },
+        index=[
+            "2025-01-02T09:30:00-05:00",
+            "2025-07-02T09:30:00-04:00",
+        ],
+    )
+
+    class FakeTicker:
+        def __init__(self, _ticker: str) -> None:
+            return None
+
+        def history(self, **_kwargs: str) -> pd.DataFrame:
+            return history
+
+    monkeypatch.setitem(sys.modules, "yfinance", SimpleNamespace(Ticker=FakeTicker))
+    provider = YFinanceDataProvider(timeframe="1Day")
+
+    bars = provider.get_bars("SPY")
+
+    assert bars.index.tz is not None
+    assert str(bars.index.tz) == "UTC"
